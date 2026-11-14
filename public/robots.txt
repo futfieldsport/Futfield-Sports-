@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://futfieldsport.com.ng/sitemap.xml

@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --font-display: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --accent-primary: #00E676;
+  --accent-deep: #059669;
+  --accent-soft: rgba(0, 230, 118, 0.12);
+  --accent-ring: rgba(0, 230, 118, 0.35);
+}
+
+[data-club-theme="arsenal"] {
+  --accent-primary: #EF4444;
+  --accent-deep: #DC2626;
+  --accent-soft: rgba(239, 68, 68, 0.12);
+  --accent-ring: rgba(239, 68, 68, 0.35);
+}
+
+[data-club-theme="barca"] {
+  --accent-primary: #3B82F6;
+  --accent-deep: #2563EB;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --accent-ring: rgba(59, 130, 246, 0.35);
+}
+
+[data-club-theme="madrid"] {
+  --accent-primary: #F59E0B;
+  --accent-deep: #D97706;
+  --accent-soft: rgba(245, 158, 11, 0.12);
+  --accent-ring: rgba(245, 158, 11, 0.35);
+}
+
+[data-club-theme="chelsea"] {
+  --accent-primary: #2563EB;
+  --accent-deep: #1D4ED8;
+  --accent-soft: rgba(37, 99, 235, 0.12);
+  --accent-ring: rgba(37, 99, 235, 0.35);
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  .font-mono,
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.club-accent-bar {
+  background-color: var(--accent-primary);
+}
+
+.club-accent-text {
+  color: var(--accent-deep);
+}
+
+.dark .club-accent-text {
+  color: var(--accent-primary);
+}
+
+/* Custom scrollbars for match chat and feeds */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes kenburns {
+  0% {
+    transform: scale(1.0) translate(0, 0);
+  }
+  50% {
+    transform: scale(1.05) translate(-0.5%, -0.5%);
+  }
+  100% {
+    transform: scale(1.09) translate(0.5%, 0.5%);
+  }
+}
+
+@keyframes floatGlow {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+    filter: drop-shadow(0 0 20px rgba(0, 230, 118, 0.32));
+  }
+  50% {
+    transform: translateY(-6px) scale(1.02);
+    filter: drop-shadow(0 0 34px rgba(0, 230, 118, 0.55));
+  }
+}
+
+@keyframes orbitSpin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmerSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
+
+.animate-kenburns {
+  animation: kenburns 5s ease-out forwards;
+}
+
+.animate-float-glow {
+  animation: floatGlow 3.5s ease-in-out infinite;
+}
+
+.animate-orbit-spin {
+  animation: orbitSpin 18s linear infinite;
+}
+
+.animate-shimmer-sweep {
+  animation: shimmerSweep 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-kenburns,
+  .animate-float-glow,
+  .animate-orbit-spin,
+  .animate-shimmer-sweep,
+  .animate-pulse,
+  .animate-ping,
+  .animate-bounce {
+    animation: none !important;
+  }
+}

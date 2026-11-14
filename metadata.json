@@ -1,0 +1,6 @@
+{
+  "name": "Futfield - Football Fan App | Live Scores & Match Chat",
+  "description": "Join worldwide football fans on Futfield - share posts, videos, live scores, match chat. Free football community.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
