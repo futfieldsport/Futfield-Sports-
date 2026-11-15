@@ -47,8 +47,9 @@ import {
 } from '../services/supabaseClient';
 import { translateText } from '../services/footballAi';
 import { applyRouteSeoMetadata, resolvePathFromAppState } from '../utils/seo';
+import type { SharePayload } from '../utils/share';
 
-export type MainTab = 'home' | 'scores' | 'videos' | 'communities' | 'menu' | 'profile' | 'settings' | 'studio' | 'pricing' | 'support' | 'blog' | 'reviews';
+export type MainTab = 'home' | 'scores' | 'videos' | 'communities' | 'menu' | 'profile' | 'settings' | 'studio' | 'pricing' | 'support' | 'blog' | 'reviews' | 'share';
 
 export type SupportLegalSection =
   | 'support'
@@ -60,6 +61,93 @@ export type SupportLegalSection =
   | 'refund'
   | 'guidelines'
   | 'cookies';
+
+const DEFAULT_CREATOR_AVATAR = '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
+const DEFAULT_VIDEO_THUMBNAIL = '/assets/aistudio/IMG-20261102-WA2735_f2548d41.jpg';
+
+export function normalizeVideoItem(raw: any): VideoItem {
+  const creatorObj = raw?.creator && typeof raw.creator === 'object' ? raw.creator : {};
+  const authorObj = raw?.author && typeof raw.author === 'object' ? raw.author : {};
+  const fallbackHandle = creatorObj.handle || authorObj.handle || (raw?.userId ? `@user_${String(raw.userId).slice(0, 6)}` : '@creator');
+  return {
+    ...raw,
+    id: raw?.id || `v_${Date.now()}`,
+    title: raw?.title || 'Matchday Highlight',
+    description: raw?.description || '',
+    videoUrl: raw?.videoUrl || '',
+    thumbnailUrl: raw?.thumbnailUrl || DEFAULT_VIDEO_THUMBNAIL,
+    duration: raw?.duration || '0:30',
+    views: Number(raw?.views) || 0,
+    likes: Number(raw?.likes) || 0,
+    commentsCount: Number(raw?.commentsCount) || 0,
+    shares: Number(raw?.shares) || 0,
+    isLiked: Boolean(raw?.isLiked),
+    isSaved: Boolean(raw?.isSaved),
+    hashtags: Array.isArray(raw?.hashtags) ? raw.hashtags : [],
+    creator: {
+      name: creatorObj.name || authorObj.name || 'Pitch Creator',
+      handle: fallbackHandle,
+      subscribers: creatorObj.subscribers || '1 supporter',
+      avatar: creatorObj.avatar || authorObj.avatar || DEFAULT_CREATOR_AVATAR,
+      isSubscribed: Boolean(creatorObj.isSubscribed),
+      isVerified: Boolean(creatorObj.isVerified),
+    },
+  } as VideoItem;
+}
+
+export function isTestArtifactPost(raw: any): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const id = String(raw.id || '').toLowerCase();
+  const handle = String(raw.author?.handle || '').toLowerCase();
+  const name = String(raw.author?.name || '').toLowerCase();
+  const content = String(raw.content || '').toLowerCase();
+  const mediaUrl = String(raw.mediaUrl || raw.imageUrl || '').toLowerCase();
+  return (
+    id.startsWith('post_test_') ||
+    handle === '@testfan' ||
+    name === 'test fan' ||
+    content.includes('testing live post #futfield') ||
+    mediaUrl.includes('9m6n_test.png')
+  );
+}
+
+export function isTestArtifactVideo(raw: any): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const id = String(raw.id || '').toLowerCase();
+  const title = String(raw.title || '').toLowerCase();
+  const videoUrl = String(raw.videoUrl || '').toLowerCase();
+  const handle = String(raw.author?.handle || raw.creator?.handle || '').toLowerCase();
+  return (
+    id === 'vid_1794743322269' ||
+    handle === '@testfan' ||
+    (title === 'training highlight' && videoUrl.includes('/uploads/videos/sample.mp4'))
+  );
+}
+
+export function normalizePostItem(raw: any): Post {
+  const authorObj = raw?.author && typeof raw.author === 'object' ? raw.author : {};
+  const creatorObj = raw?.creator && typeof raw.creator === 'object' ? raw.creator : {};
+  return {
+    ...raw,
+    id: raw?.id || `post_${Date.now()}`,
+    content: raw?.content || '',
+    timestamp: raw?.timestamp || 'Recently',
+    likes: Number(raw?.likes) || 0,
+    isLiked: Boolean(raw?.isLiked),
+    commentsCount: Number(raw?.commentsCount) || 0,
+    shares: Number(raw?.shares) || 0,
+    reposts: Number(raw?.reposts) || 0,
+    tags: Array.isArray(raw?.tags) ? raw.tags : [],
+    category: raw?.category || 'foryou',
+    author: {
+      name: authorObj.name || creatorObj.name || 'Football Supporter',
+      handle: authorObj.handle || creatorObj.handle || (raw?.userId ? `@user_${String(raw.userId).slice(0, 6)}` : '@fan'),
+      avatar: authorObj.avatar || creatorObj.avatar || DEFAULT_CREATOR_AVATAR,
+      clubBadge: authorObj.clubBadge || raw?.clubTag || undefined,
+      isVerified: Boolean(authorObj.isVerified),
+    },
+  } as Post;
+}
 
 interface FootballContextType {
   user: UserProfile;
@@ -119,6 +207,11 @@ interface FootballContextType {
     mediaSizeBytes?: number;
     mediaSizeMb?: number;
     thumbnailUrl?: string;
+    videoKind?: 'short' | 'video';
+    aspectRatio?: '9:16' | '16:9';
+    durationSeconds?: number;
+    width?: number;
+    height?: number;
     pollQuestion?: string;
     pollOptions?: string[];
     tags?: string[];
@@ -165,6 +258,9 @@ interface FootballContextType {
   videos: VideoItem[];
   activeVideoIndex: number;
   setActiveVideoIndex: (idx: number) => void;
+  latestUploadedVideoId: string | null;
+  setLatestUploadedVideoId: (id: string | null) => void;
+  openVideoInReels: (videoId: string) => void;
   toggleLikeVideo: (videoId: string) => void;
   reactToVideo: (videoId: string, emoji: string) => Promise<void>;
   shareVideo: (videoId: string) => Promise<number>;
@@ -185,9 +281,12 @@ interface FootballContextType {
     sizeMb?: number;
     videoKind?: 'short' | 'video';
     aspectRatio?: '9:16' | '16:9';
+    width?: number;
+    height?: number;
     copyrightStatus?: 'CLEAR' | 'WARNING' | 'BLOCKED';
     copyrightReport?: any;
-  }) => Promise<void>;
+    skipAutoNavigate?: boolean;
+  }) => Promise<VideoItem | null>;
   
   // Real-time Analytics & Media MB Storage Stats
   realtimeAnalytics: {
@@ -261,12 +360,7 @@ interface FootballContextType {
   openCreatorProfile: (creator: { handle: string; name: string; avatar: string; clubBadge?: string }) => void;
   closeCreatorProfile: () => void;
 
-  // Daily Highlight Reel
-  showDailyHighlightReel: boolean;
-  setShowDailyHighlightReel: (open: boolean) => void;
-  dailyHighlightClips: VideoItem[];
-
-  // Creator Monetization Wallet & Stadium Gifting
+  // Creator Monetization Wallet
   creatorWallet: {
     userId: string;
     balance: number;
@@ -276,25 +370,21 @@ interface FootballContextType {
     subscriptions: number;
     transactions: any[];
   };
-  sendGiftToCreator: (
-    toUserHandle: string,
-    toUserName: string,
-    gift: { id: string; name: string; icon: string; price: number },
-    postId?: string,
-    videoId?: string
-  ) => Promise<boolean>;
   requestPayout: (amount: number, method: string, destination: string) => Promise<boolean>;
   fetchMonetizationAdvice: () => Promise<any>;
   monetizationModalOpen: boolean;
   setMonetizationModalOpen: (open: boolean) => void;
   pricingModalOpen: boolean;
   setPricingModalOpen: (open: boolean) => void;
+  shareModalPayload: SharePayload | null;
+  openShareSheet: (payload: SharePayload) => void;
+  closeShareSheet: () => void;
 }
 
 const FootballContext = createContext<FootballContextType | undefined>(undefined);
 
 export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Purge any stale client mock records from previous runs on initialization
+  // Purge any stale client mock / test-fan records from previous runs on initialization
   useEffect(() => {
     try {
       const isPurged = localStorage.getItem('futfield_profile_v6_cleared');
@@ -306,6 +396,12 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         localStorage.removeItem('futfield_communities');
         localStorage.setItem('futfield_profile_v6_cleared', 'true');
         setUser(INITIAL_USER);
+      }
+      if (!localStorage.getItem('futfield_test_fan_purged_v2')) {
+        setPosts(prev => prev.filter(p => !isTestArtifactPost(p)));
+        setVideos(prev => prev.filter(v => !isTestArtifactVideo(v)));
+        setConnectedCreators(prev => prev.filter(h => h.toLowerCase() !== '@testfan'));
+        localStorage.setItem('futfield_test_fan_purged_v2', 'true');
       }
     } catch {}
   }, []);
@@ -375,12 +471,17 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (p === '/privacy') return { tab: 'support' as MainTab, support: 'privacy' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
     if (p === '/refund') return { tab: 'support' as MainTab, support: 'refund' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
     if (p === '/reviews') return { tab: 'reviews' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
+    if (p === '/share') return { tab: 'share' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
+    if (p === '/highlights') return { tab: 'videos' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
     if (p === '/blog' || p.startsWith('/blog/')) {
       const slug = rawPath.replace(/^\/blog\/?/i, '').trim() || null;
       return { tab: 'blog' as MainTab, support: 'support' as SupportLegalSection, blogSlug: slug, profileId: null, matchId: null };
     }
     if (p.startsWith('/profile/')) {
       const uname = decodeURIComponent(rawPath.replace(/^\/profile\//i, '')).trim() || null;
+      if (uname && uname.replace(/^@/, '').toLowerCase() === 'testfan') {
+        return { tab: 'home' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
+      }
       return { tab: 'profile' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: uname, matchId: null };
     }
     if (p.startsWith('/match/')) {
@@ -416,6 +517,17 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
   const [communities, setCommunities] = useState<Community[]>(INITIAL_COMMUNITIES);
   const [selectedCommunity, setSelectedCommunityState] = useState<Community | null>(null);
+  const [shareModalPayload, setShareModalPayload] = useState<SharePayload | null>(null);
+  const [latestUploadedVideoId, setLatestUploadedVideoId] = useState<string | null>(null);
+
+  const openShareSheet = useCallback((payload: SharePayload) => {
+    haptics.light();
+    setShareModalPayload(payload);
+  }, []);
+
+  const closeShareSheet = useCallback(() => {
+    setShareModalPayload(null);
+  }, []);
   const [navHistory, setNavHistory] = useState<Array<{
     activeTab: MainTab;
     viewingProfileUserId: string | null;
@@ -676,12 +788,12 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     fetchLiveMatches();
     fetchServerPosts()
       .then(srv => {
-        if (Array.isArray(srv) && srv.length > 0) setPosts(srv);
+        if (Array.isArray(srv) && srv.length > 0) setPosts(srv.filter(Boolean).map(normalizePostItem));
       })
       .catch(() => {});
     fetchServerVideos()
       .then(srv => {
-        if (Array.isArray(srv) && srv.length > 0) setVideos(srv);
+        if (Array.isArray(srv) && srv.length > 0) setVideos(srv.filter(Boolean).map(normalizeVideoItem));
       })
       .catch(() => {});
     return { clearedKeys };
@@ -693,10 +805,14 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const saved = localStorage.getItem('futfield_posts');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed
+            .filter(p => Boolean(p) && !isTestArtifactPost(p))
+            .map(normalizePostItem);
+        }
       }
     } catch {}
-    return INITIAL_POSTS;
+    return INITIAL_POSTS.filter(p => !isTestArtifactPost(p)).map(normalizePostItem);
   });
   const [matches, setMatches] = useState<Match[]>(INITIAL_MATCHES);
   const [activeMatchRoom, setActiveMatchRoom] = useState<Match | null>(null);
@@ -707,10 +823,14 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const saved = localStorage.getItem('futfield_videos');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed
+            .filter(v => Boolean(v) && !isTestArtifactVideo(v))
+            .map(normalizeVideoItem);
+        }
       }
     } catch {}
-    return INITIAL_VIDEOS;
+    return INITIAL_VIDEOS.filter(v => !isTestArtifactVideo(v)).map(normalizeVideoItem);
   });
   const [activeVideoIndex, setActiveVideoIndex] = useState<number>(0);
 
@@ -796,15 +916,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setSelectedCreatorForProfile(null);
   };
 
-  // Daily Highlight Reel State (auto-aggregates top 5 trending match clips)
-  const [showDailyHighlightReel, setShowDailyHighlightReel] = useState(false);
-  const dailyHighlightClips = useMemo(() => {
-    return [...videos]
-      .sort((a, b) => (b.views + b.likes * 3) - (a.views + a.likes * 3))
-      .slice(0, 5);
-  }, [videos]);
-
-  // Creator Monetization Wallet & Gifting State
+  // Creator Monetization Wallet State
   const [monetizationModalOpen, setMonetizationModalOpen] = useState(false);
   const [pricingModalOpen, setPricingModalOpen] = useState(false);
   const [creatorWallet, setCreatorWallet] = useState<{
@@ -824,41 +936,6 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     subscriptions: 0,
     transactions: [],
   });
-
-  const sendGiftToCreator = async (
-    toUserHandle: string,
-    toUserName: string,
-    gift: { id: string; name: string; icon: string; price: number },
-    postId?: string,
-    videoId?: string
-  ): Promise<boolean> => {
-    haptics.like();
-    try {
-      const res = await fetch('/api/monetization/tip', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fromUserId: user.id,
-          fromUserName: user.name,
-          toUserHandle,
-          giftName: gift.name,
-          amount: gift.price,
-          postId,
-          videoId,
-        }),
-      });
-      if (res.ok) {
-        addFanPoints(3, `Gifted ${gift.name}`);
-        addNotification({
-          title: `Gift Sent to ${toUserName}! 🎁`,
-          body: `You sent a ${gift.name} ($${gift.price.toFixed(2)}). +3 Fan Points awarded!`,
-          type: 'like',
-        });
-        return true;
-      }
-    } catch {}
-    return true;
-  };
 
   const requestPayout = async (amount: number, method: string, destination: string): Promise<boolean> => {
     haptics.like();
@@ -1008,15 +1085,25 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => clearInterval(liveSyncInterval);
   }, [refreshFrequency]);
 
-  // Poll subscription status for automatic expiration downgrade & alert
+  // Poll subscription status for automatic Pro unlock & expiration downgrade
   useEffect(() => {
     if (!user?.id) return;
     const checkSub = () => {
-      fetch(`/api/subscriptions/check/${encodeURIComponent(user.id)}`)
+      const emailQ = user.email ? `?email=${encodeURIComponent(user.email)}` : '';
+      fetch(`/api/subscriptions/check/${encodeURIComponent(user.id)}${emailQ}`)
         .then(r => (r.ok ? r.json() : null))
         .then(data => {
           if (!data) return;
-          if (data.isExpired && user.isPro) {
+          if (data.isPro && (!user.isPro || (data.tier && user.proPlan !== data.tier))) {
+            const tier = (data.tier || 'pro') as 'pro' | 'vip' | 'season';
+            updateUser({
+              isPro: true,
+              membershipTier: tier === 'vip' || tier === 'season' ? 'vip' : 'pro',
+              proPlan: tier,
+              proExpiresAt: data.expiresAt || user.proExpiresAt,
+              paystackReference: data.reference || user.paystackReference,
+            });
+          } else if (data.isExpired && user.isPro) {
             updateUser({ isPro: false, membershipTier: 'free' });
           }
           if (Array.isArray(data.alerts) && data.alerts.length > 0) {
@@ -1034,7 +1121,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     checkSub();
     const subTimer = setInterval(checkSub, 60000);
     return () => clearInterval(subTimer);
-  }, [user.id, user.isPro]);
+  }, [user.id, user.email, user.isPro, user.proPlan]);
 
   // Real-Time Global Feed Stream (Instant Worldwide Post, Video, Engagement & Analytics Sync)
   useEffect(() => {
@@ -1047,8 +1134,9 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         sse.addEventListener('new_post', (e: MessageEvent) => {
           try {
-            const incomingPost: Post = JSON.parse(e.data);
-            if (incomingPost && incomingPost.id) {
+            const rawPost = JSON.parse(e.data);
+            if (rawPost && rawPost.id) {
+              const incomingPost = normalizePostItem(rawPost);
               setPosts(prev => {
                 if (prev.some(p => p.id === incomingPost.id)) return prev;
                 return [incomingPost, ...prev];
@@ -1059,8 +1147,9 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         sse.addEventListener('new_video', (e: MessageEvent) => {
           try {
-            const incomingVideo: VideoItem = JSON.parse(e.data);
-            if (incomingVideo && incomingVideo.id) {
+            const rawVideo = JSON.parse(e.data);
+            if (rawVideo && rawVideo.id) {
+              const incomingVideo = normalizeVideoItem(rawVideo);
               setVideos(prev => {
                 if (prev.some(v => v.id === incomingVideo.id)) return prev;
                 return [incomingVideo, ...prev];
@@ -1161,32 +1250,34 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           } catch {}
         });
 
-        sse.addEventListener('tip_received', (e: MessageEvent) => {
+        sse.addEventListener('subscription_unlocked', (e: MessageEvent) => {
           try {
-            const tipData = JSON.parse(e.data);
-            if (tipData?.toUserHandle === user.handle) {
-              setCreatorWallet(prev => ({
-                ...prev,
-                balance: +(prev.balance + tipData.amount).toFixed(2),
-                totalEarned: +(prev.totalEarned + tipData.amount).toFixed(2),
-                tipsReceived: +(prev.tipsReceived + tipData.amount).toFixed(2),
-                transactions: [
-                  {
-                    id: `tx_${Date.now()}`,
-                    type: 'tip',
-                    amount: tipData.amount,
-                    description: `Gift: ${tipData.giftName} from ${tipData.fromUserName}`,
-                    fromUser: tipData.fromUserName,
-                    status: 'COMPLETED',
-                    timestamp: 'Just now',
-                  },
-                  ...prev.transactions,
-                ],
-              }));
+            const payload = JSON.parse(e.data);
+            const matchesId = payload?.userId && payload.userId === user.id;
+            const matchesEmail =
+              payload?.email &&
+              user.email &&
+              payload.email.toLowerCase() === user.email.toLowerCase();
+            if (matchesId || matchesEmail) {
+              const tier = (payload.tier || 'pro') as 'pro' | 'vip' | 'season';
+              const bonusFp = Number(payload.bonusPoints || 0);
+              updateUser({
+                isPro: true,
+                membershipTier: tier === 'vip' || tier === 'season' ? 'vip' : 'pro',
+                proPlan: tier,
+                proExpiresAt: payload.expiresAt,
+                paystackReference: payload.reference,
+                ...(bonusFp > 0
+                  ? {
+                      fanPoints: (user.fanPoints || 0) + bonusFp,
+                      weeklyPoints: (user.weeklyPoints || 0) + bonusFp,
+                    }
+                  : {}),
+              });
               addNotification({
-                title: 'Stadium Gift Received! 🎁',
-                body: `${tipData.fromUserName} sent you a ${tipData.giftName} ($${tipData.amount.toFixed(2)})!`,
-                type: 'like',
+                title: 'Paystack Pro Pass Unlocked 🏆',
+                body: `Your ${tier.toUpperCase()} pass is now active worldwide.`,
+                type: 'system',
               });
             }
           } catch {}
@@ -1207,11 +1298,16 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Initial parallel server hydration
     fetchServerPosts()
       .then(serverPosts => {
-        if (serverPosts && serverPosts.length > 0) {
+        if (Array.isArray(serverPosts)) {
+          const normalized = serverPosts
+            .filter(p => Boolean(p) && !isTestArtifactPost(p))
+            .map(normalizePostItem);
           setPosts(prev => {
-            const serverIds = new Set(serverPosts.map(p => p.id));
-            const localOnly = prev.filter(p => !serverIds.has(p.id));
-            return [...serverPosts, ...localOnly];
+            const cleanPrev = prev.filter(p => !isTestArtifactPost(p));
+            if (normalized.length === 0) return cleanPrev;
+            const serverIds = new Set(normalized.map(p => p.id));
+            const localOnly = cleanPrev.filter(p => !serverIds.has(p.id));
+            return [...normalized, ...localOnly];
           });
         }
       })
@@ -1219,11 +1315,16 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     fetchServerVideos()
       .then(serverVideos => {
-        if (serverVideos && serverVideos.length > 0) {
+        if (Array.isArray(serverVideos)) {
+          const normalized = serverVideos
+            .filter(v => Boolean(v) && !isTestArtifactVideo(v))
+            .map(normalizeVideoItem);
           setVideos(prev => {
-            const serverIds = new Set(serverVideos.map(v => v.id));
-            const localOnly = prev.filter(v => !serverIds.has(v.id));
-            return [...serverVideos, ...localOnly];
+            const cleanPrev = prev.filter(v => !isTestArtifactVideo(v));
+            if (normalized.length === 0) return cleanPrev;
+            const serverIds = new Set(normalized.map(v => v.id));
+            const localOnly = cleanPrev.filter(v => !serverIds.has(v.id));
+            return [...normalized, ...localOnly];
           });
         }
       })
@@ -1326,6 +1427,11 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     mediaSizeBytes?: number;
     mediaSizeMb?: number;
     thumbnailUrl?: string;
+    videoKind?: 'short' | 'video';
+    aspectRatio?: '9:16' | '16:9';
+    durationSeconds?: number;
+    width?: number;
+    height?: number;
     pollQuestion?: string;
     pollOptions?: string[];
     tags?: string[];
@@ -1367,6 +1473,12 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       mediaType: finalMediaType,
       imageUrl: data.imageUrl || (finalMediaType === 'image' ? data.mediaUrl : undefined),
       videoUrl: data.videoUrl || (finalMediaType === 'video' ? data.mediaUrl : undefined),
+      thumbnailUrl: data.thumbnailUrl,
+      videoKind: data.videoKind,
+      aspectRatio: data.aspectRatio,
+      durationSeconds: data.durationSeconds,
+      width: data.width,
+      height: data.height,
       mediaSizeBytes: data.mediaSizeBytes,
       mediaSizeMb: data.mediaSizeMb,
       location: data.location,
@@ -1762,18 +1874,24 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const toggleSubscribeCreator = (creatorHandle: string) => {
     setVideos(prev =>
       prev.map(v => {
-        if (v.creator.handle === creatorHandle) {
+        if (v.creator?.handle === creatorHandle) {
           return {
             ...v,
             creator: {
               ...v.creator,
-              isSubscribed: !v.creator.isSubscribed,
+              isSubscribed: !v.creator?.isSubscribed,
             },
           };
         }
         return v;
       })
     );
+  };
+
+  const openVideoInReels = (videoId: string) => {
+    setLatestUploadedVideoId(videoId);
+    setActiveVideoIndex(0);
+    setActiveTab('videos');
   };
 
   const addVideo = async (data: {
@@ -1791,9 +1909,12 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     sizeMb?: number;
     videoKind?: 'short' | 'video';
     aspectRatio?: '9:16' | '16:9';
+    width?: number;
+    height?: number;
     copyrightStatus?: 'CLEAR' | 'WARNING' | 'BLOCKED';
     copyrightReport?: any;
-  }) => {
+    skipAutoNavigate?: boolean;
+  }): Promise<VideoItem | null> => {
     const isProUser = Boolean(user.isPro || user.membershipTier === 'pro' || user.membershipTier === 'vip');
     const limitCheck = checkDailyLimit(user.id, 'video', isProUser);
     if (!limitCheck.allowed) {
@@ -1803,7 +1924,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         type: 'system',
       });
       setPricingModalOpen(true);
-      return;
+      return null;
     }
     incrementDailyLimit(user.id, 'video');
 
@@ -1845,6 +1966,8 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       sizeMb: data.sizeMb,
       videoKind: resolvedKind,
       aspectRatio: resolvedRatio,
+      width: data.width,
+      height: data.height,
       copyrightStatus: data.copyrightStatus || 'CLEAR',
       copyrightReport: data.copyrightReport,
       quality: resolvedRatio === '16:9' ? '1080p Widescreen · Pitch Sound ON' : '1080p 9:16 Short · Pitch Sound ON',
@@ -1861,15 +1984,21 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         body: serverRes.error || 'Video failed server duration or copyright validation.',
         type: 'system',
       });
-      return;
+      return null;
     }
 
-    const finalVideo = serverRes.video ? { ...newVideo, ...serverRes.video } : newVideo;
+    const finalVideo = normalizeVideoItem(
+      serverRes.video ? { ...newVideo, ...serverRes.video } : newVideo
+    );
     setVideos(prev => [finalVideo, ...prev.filter(v => v.id !== finalVideo.id)]);
+    setLatestUploadedVideoId(finalVideo.id);
     setActiveVideoIndex(0);
-    setActiveTab('videos');
+    if (!data.skipAutoNavigate) {
+      setActiveTab('videos');
+    }
     addFanPoints(20, resolvedKind === 'short' ? 'Uploaded 9:16 Pitch Short' : 'Uploaded 16:9 Football Video');
     refreshMediaAndAnalytics().catch(() => {});
+    return finalVideo;
   };
 
   const toggleJoinCommunity = async (communityId: string) => {
@@ -1973,6 +2102,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const canGoBack = Boolean(
     activeMatchRoom ||
+    shareModalPayload ||
     pricingModalOpen ||
     playerScoutModalOpen ||
     notificationsModalOpen ||
@@ -1981,7 +2111,6 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     selectedCreatorForProfile ||
     aiDrawerOpen ||
     authModalOpen ||
-    showDailyHighlightReel ||
     selectedCommunity ||
     viewingProfileUserId ||
     navHistory.length > 0 ||
@@ -1991,16 +2120,16 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const goBack = () => {
     haptics.light();
     // 1. Dismiss topmost overlay modal / drawer first
+    if (shareModalPayload) {
+      closeShareSheet();
+      return;
+    }
     if (activeMatchRoom) {
       closeMatchRoom();
       return;
     }
     if (selectedCreatorForProfile) {
       closeCreatorProfile();
-      return;
-    }
-    if (showDailyHighlightReel) {
-      setShowDailyHighlightReel(false);
       return;
     }
     if (pricingModalOpen) {
@@ -2163,6 +2292,9 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         videos,
         activeVideoIndex,
         setActiveVideoIndex,
+        latestUploadedVideoId,
+        setLatestUploadedVideoId,
+        openVideoInReels,
         toggleLikeVideo,
         reactToVideo,
         shareVideo,
@@ -2209,17 +2341,16 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         selectedCreatorForProfile,
         openCreatorProfile,
         closeCreatorProfile,
-        showDailyHighlightReel,
-        setShowDailyHighlightReel,
-        dailyHighlightClips,
         creatorWallet,
-        sendGiftToCreator,
         requestPayout,
         fetchMonetizationAdvice,
         monetizationModalOpen,
         setMonetizationModalOpen,
         pricingModalOpen,
         setPricingModalOpen,
+        shareModalPayload,
+        openShareSheet,
+        closeShareSheet,
         showSplash,
         setShowSplash,
         replaySplash,

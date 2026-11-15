@@ -4,7 +4,6 @@ import {
   TrendingUp,
   Award,
   ArrowUpRight,
-  Gift,
   Shield,
   CreditCard,
   Building,
@@ -102,22 +101,16 @@ export const MonetizationModal: React.FC<MonetizationModalProps> = ({
               <span className="text-xs text-emerald-200 font-sans font-bold">Available USD</span>
             </div>
             <p className="text-[11px] text-emerald-100/80 mt-0.5">
-              Accumulated from real video ad share, fan matchday tips & subscriptions
+              Accumulated from real video ad share &amp; Paystack subscriptions
             </p>
           </div>
 
           {/* Breakdown Pills */}
-          <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/15">
+          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/15">
             <div className="p-2 rounded-xl bg-black/20 backdrop-blur-sm">
               <span className="text-[10px] text-emerald-200 block">Ad Revenue</span>
               <span className="text-xs font-mono font-black text-white">
                 ${creatorWallet.adRevenue.toFixed(2)}
-              </span>
-            </div>
-            <div className="p-2 rounded-xl bg-black/20 backdrop-blur-sm">
-              <span className="text-[10px] text-emerald-200 block">Stadium Tips</span>
-              <span className="text-xs font-mono font-black text-white">
-                ${creatorWallet.tipsReceived.toFixed(2)}
               </span>
             </div>
             <div className="p-2 rounded-xl bg-black/20 backdrop-blur-sm">

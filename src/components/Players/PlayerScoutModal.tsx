@@ -84,11 +84,11 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ isOpen, onCl
   if (!isOpen) return null;
 
   const isFavorite = (name: string) => {
-    return user.favoritePlayers.some(p => p.toLowerCase().includes(name.toLowerCase()));
+    return (user.favoritePlayers || []).some(p => p.toLowerCase().includes(name.toLowerCase()));
   };
 
   const handleToggleFavorite = (player: FootballPlayer) => {
-    let nextList = [...user.favoritePlayers];
+    let nextList = [...(user.favoritePlayers || [])];
     if (isFavorite(player.name)) {
       nextList = nextList.filter(p => !p.toLowerCase().includes(player.name.toLowerCase()));
     } else {
@@ -98,9 +98,18 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ isOpen, onCl
     updateUser({ favoritePlayers: nextList });
   };
 
-  const handleSelectPlayer = (player: FootballPlayer) => {
+  const handleSelectPlayer = async (player: FootballPlayer) => {
     setSelectedPlayer(player);
     setMobileShowDetail(true);
+    try {
+      const res = await fetch(`/api/football/player/${encodeURIComponent(player.id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.player) {
+          setSelectedPlayer(prev => (prev?.id === player.id ? data.player : prev));
+        }
+      }
+    } catch {}
   };
 
   return (

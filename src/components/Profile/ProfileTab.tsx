@@ -59,6 +59,8 @@ export const ProfileTab: React.FC = () => {
     viewingProfileUserId,
     navigateToProfile,
     toggleFollowUser,
+    openShareSheet,
+    openVideoInReels,
   } = useFootball();
 
   const isOwnProfile = !viewingProfileUserId || viewingProfileUserId === user.id || viewingProfileUserId === user.handle;
@@ -285,24 +287,21 @@ export const ProfileTab: React.FC = () => {
   };
 
   const handleShareProfile = () => {
-    const shareTitle = `${displayProfile.name} on FUTFIELD`;
-    const shareText = `Check out ${displayProfile.name}'s football profile on FUTFIELD!`;
-    const shareUrl = window.location.href;
+    const cleanHandle = (displayProfile.handle || '@futfield').replace(/^@?/, '@');
+    const shareTitle = `${displayProfile.name} (${cleanHandle}) on FUTFIELD`;
+    const shareText = `Follow ${displayProfile.name} on FUTFIELD for matchday takes, highlights & live football chat!`;
+    const path = `/profile/${encodeURIComponent(cleanHandle)}`;
+    const url = typeof window !== 'undefined' && window.location?.origin
+      ? `${window.location.origin}${path}`
+      : `https://futfieldsport.com.ng${path}`;
 
-    if (navigator.share) {
-      navigator.share({
-        title: shareTitle,
-        text: shareText,
-        url: shareUrl,
-      }).catch(() => {});
-    } else {
-      navigator.clipboard?.writeText(shareUrl);
-      addNotification({
-        title: 'Profile Link Copied!',
-        body: 'Share link copied to clipboard.',
-        type: 'system',
-      });
-    }
+    openShareSheet({
+      kind: 'profile',
+      title: shareTitle,
+      text: shareText,
+      url,
+      previewImage: displayProfile.avatar,
+    });
   };
 
   // Send Direct Banter / Message
@@ -786,18 +785,58 @@ export const ProfileTab: React.FC = () => {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2.5">
-              {userVideos.map(v => (
-                <div
-                  key={v.id}
-                  onClick={() => setActiveTab('videos')}
-                  className="rounded-xl overflow-hidden bg-black aspect-video relative group cursor-pointer"
-                >
-                  <img src={v.thumbnailUrl} alt={`${v.title || 'football match highlight'} thumbnail`} loading="lazy" decoding="async" className="w-full h-full object-cover" />
-                  <span className="absolute bottom-1 right-1 bg-black/80 px-1 py-0.5 text-[9px] text-white rounded">
-                    {v.duration}
-                  </span>
-                </div>
-              ))}
+              {userVideos.map(v => {
+                const isShort = v.videoKind !== 'video' && v.aspectRatio !== '16:9';
+                return (
+                  <div
+                    key={v.id}
+                    onClick={() => openVideoInReels(v.id)}
+                    className="rounded-2xl overflow-hidden bg-slate-900 border border-slate-200/80 dark:border-white/10 group cursor-pointer flex flex-col"
+                  >
+                    <div className={`relative w-full bg-black overflow-hidden ${isShort ? 'aspect-[9/12]' : 'aspect-video'}`}>
+                      {v.thumbnailUrl && !v.thumbnailUrl.includes('IMG-20261102-WA2735') ? (
+                        <img
+                          src={v.thumbnailUrl}
+                          alt={`${v.title || 'football match highlight'} thumbnail`}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      ) : v.videoUrl ? (
+                        <video
+                          src={`${v.videoUrl}#t=0.5`}
+                          preload="metadata"
+                          muted
+                          playsInline
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <img
+                          src={v.thumbnailUrl}
+                          alt={`${v.title || 'football match highlight'} thumbnail`}
+                          loading="lazy"
+                          decoding="async"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+                      <span className="absolute bottom-1.5 right-1.5 bg-black/80 px-1.5 py-0.5 text-[10px] font-mono text-white rounded">
+                        {v.duration || '0:30'}
+                      </span>
+                      <span className="absolute top-1.5 left-1.5 bg-black/75 px-1.5 py-0.5 text-[9px] font-bold text-[#00E676] rounded">
+                        {isShort ? '9:16 Short' : '16:9 Video'}
+                      </span>
+                    </div>
+                    <div className="p-2 bg-white dark:bg-[#12171F]">
+                      <p className="text-[11px] font-bold text-slate-900 dark:text-white line-clamp-1">
+                        {v.title}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-white/55 tabular-nums">
+                        {v.views || 0} views · {v.likes || 0} likes
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -821,12 +860,18 @@ export const ProfileTab: React.FC = () => {
                 className="p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 space-y-1.5 text-xs"
               >
                 <div
-                  onClick={() => navigateToProfile(p.author.handle || p.userId)}
+                  onClick={() => navigateToProfile(p.author?.handle || p.userId || '@fan')}
                   className="flex items-center gap-2 cursor-pointer group"
                 >
-                  <img src={p.author.avatar} alt={`${p.author.name} football fan avatar`} loading="lazy" decoding="async" className="w-5 h-5 rounded-full object-cover" />
+                  <img
+                    src={p.author?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                    alt={`${p.author?.name || 'Supporter'} football fan avatar`}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-5 h-5 rounded-full object-cover"
+                  />
                   <span className="font-bold text-slate-900 dark:text-white text-[11px] group-hover:text-[#00E676] transition-colors">
-                    {p.author.name}
+                    {p.author?.name || 'Supporter'}
                   </span>
                 </div>
                 <p className="text-slate-700 dark:text-white/90 line-clamp-2">{p.content}</p>

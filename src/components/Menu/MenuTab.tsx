@@ -1,29 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   BrainCircuit,
   Shield,
   Layers,
   Award,
-  Trophy,
   Search,
   Users,
   Settings,
   ChevronRight,
   ChevronLeft,
-  Filter,
   BarChart3,
   Calendar,
-  CheckCircle2,
-  Share2,
-  Plus,
-  Play,
-  RotateCcw,
-  Zap,
+  AlertCircle,
   Activity,
   Globe,
-  Sliders,
   Crown,
-  CreditCard,
   LifeBuoy,
   BookOpen,
   MessageSquare,
@@ -31,12 +22,37 @@ import {
   FileText,
   RefreshCw,
   Cookie,
+  Smartphone,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
-import { ClubLogo } from '../Common/ClubLogo';
 import { haptics } from '../../utils/haptics';
-import { TOP_10_LEAGUES, TOP_10_LEAGUE_PLAYERS, FootballPlayer } from '../../data/top10LeaguesPlayers';
+import { TOP_10_LEAGUES, TOP_10_LEAGUE_PLAYERS, FootballPlayer, LeagueInfo } from '../../data/top10LeaguesPlayers';
 import { formatTodayFull, formatTodayShort } from '../../utils/dateFormat';
+
+interface LiveLeagueItem extends LeagueInfo {
+  fotmobId?: number;
+  liveCount?: number;
+  todayCount?: number;
+}
+
+function buildDefaultSquadSlots(pool: FootballPlayer[]): Array<FootballPlayer | null> {
+  const source = pool.length > 0 ? pool : TOP_10_LEAGUE_PLAYERS;
+  const used = new Set<string>();
+  const pick = (pos: 'GK' | 'DF' | 'MF' | 'FW'): FootballPlayer | null => {
+    const match = source.find(p => p.position === pos && !used.has(p.id))
+      || TOP_10_LEAGUE_PLAYERS.find(p => p.position === pos && !used.has(p.id))
+      || source.find(p => !used.has(p.id))
+      || null;
+    if (match) used.add(match.id);
+    return match;
+  };
+  return [
+    pick('GK'),
+    pick('DF'), pick('DF'), pick('DF'), pick('DF'),
+    pick('MF'), pick('MF'), pick('MF'),
+    pick('FW'), pick('FW'), pick('FW'),
+  ];
+}
 
 export const MenuTab: React.FC = () => {
   const {
@@ -49,9 +65,7 @@ export const MenuTab: React.FC = () => {
     openSupportLegalPage,
     setPricingModalOpen,
     matches,
-    openMatchRoom,
     communities,
-    setSelectedCommunity,
   } = useFootball();
 
   const todayFull = formatTodayFull();
@@ -59,31 +73,82 @@ export const MenuTab: React.FC = () => {
 
   // Active Dedicated View: null = Menu Hub, or string = full sub-page
   const [dedicatedPage, setDedicatedPage] = useState<'tactics' | 'leagues' | 'scout' | 'vault' | null>(null);
-  const [selectedLeagueTable, setSelectedLeagueTable] = useState<any | null>(null);
+
+  // Live Top 10 Leagues + Standings state
+  const [liveLeagues, setLiveLeagues] = useState<LiveLeagueItem[]>(
+    () => TOP_10_LEAGUES.map(l => ({ ...l, liveCount: 0, todayCount: 0 }))
+  );
+  const [leaguesLoading, setLeaguesLoading] = useState(false);
+  const [leaguesSyncedAt, setLeaguesSyncedAt] = useState<string | null>(null);
+  const [selectedLeagueTable, setSelectedLeagueTable] = useState<{
+    leagueId: string;
+    leagueName: string;
+    standings: any[];
+    source?: string;
+    error?: string | null;
+  } | null>(null);
   const [loadingTable, setLoadingTable] = useState(false);
+
+  const fetchLiveLeagues = useCallback(async () => {
+    setLeaguesLoading(true);
+    try {
+      const res = await fetch('/api/football/leagues');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.leagues) && data.leagues.length > 0) {
+          setLiveLeagues(data.leagues);
+          setLeaguesSyncedAt(data.syncedAt || new Date().toISOString());
+        }
+      }
+    } catch {}
+    setLeaguesLoading(false);
+  }, []);
 
   const fetchLeagueTable = async (leagueId: string, leagueName: string) => {
     haptics.light();
     setLoadingTable(true);
-    setSelectedLeagueTable({ leagueName, standings: [] });
+    setSelectedLeagueTable({ leagueId, leagueName, standings: [], error: null });
     try {
       const res = await fetch(`/api/football/leagues/${encodeURIComponent(leagueId)}/table`);
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedLeagueTable(data);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success && Array.isArray(data.standings) && data.standings.length > 0) {
+        setSelectedLeagueTable({
+          leagueId,
+          leagueName: data.leagueName || leagueName,
+          standings: data.standings,
+          source: data.source || 'FotMob Live Standings',
+          error: null,
+        });
+      } else {
+        setSelectedLeagueTable({
+          leagueId,
+          leagueName,
+          standings: [],
+          error: data?.error || 'Live table standings are temporarily unavailable for this competition.',
+        });
       }
-    } catch {}
+    } catch {
+      setSelectedLeagueTable({
+        leagueId,
+        leagueName,
+        standings: [],
+        error: 'Network error loading live league standings.',
+      });
+    }
     setLoadingTable(false);
   };
 
   // -------------------------------------------------------------
-  // FEATURE 1: TACTICAL PITCH ARCHITECT (100% Real Interactive Board)
+  // FEATURE 1: TACTICAL PITCH ARCHITECT (Real-Time Players & Board)
   // -------------------------------------------------------------
   const [formation, setFormation] = useState<'4-3-3' | '4-2-3-1' | '3-5-2' | '4-4-2' | '5-3-2'>('4-3-3');
   const [mentality, setMentality] = useState<'press' | 'possession' | 'counter' | 'balanced'>('press');
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number | null>(null);
+  const [tacticalSearch, setTacticalSearch] = useState('');
+  const [apiPlayers, setApiPlayers] = useState<FootballPlayer[]>(TOP_10_LEAGUE_PLAYERS);
+  const [tacticalDrawerPlayers, setTacticalDrawerPlayers] = useState<FootballPlayer[]>(TOP_10_LEAGUE_PLAYERS);
+  const [tacticalDrawerLoading, setTacticalDrawerLoading] = useState(false);
 
-  // Lineup slots based on selected formation
   const formationPositions: Record<string, string[]> = {
     '4-3-3': ['GK', 'LB', 'CB', 'CB', 'RB', 'CM', 'CDM', 'CM', 'LW', 'ST', 'RW'],
     '4-2-3-1': ['GK', 'LB', 'CB', 'CB', 'RB', 'CDM', 'CDM', 'CAM', 'LM', 'ST', 'RM'],
@@ -92,19 +157,53 @@ export const MenuTab: React.FC = () => {
     '5-3-2': ['GK', 'LWB', 'CB', 'CB', 'CB', 'RWB', 'CM', 'CM', 'CM', 'ST', 'ST'],
   };
 
-  const [squadSlots, setSquadSlots] = useState<Array<FootballPlayer | null>>([
-    TOP_10_LEAGUE_PLAYERS.find(p => p.position === 'GK') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'davies') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'saliba') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'van_dijk') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'hakimi') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'rodri') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'bellingham') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'wirtz') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'vinicius') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'haaland') || null,
-    TOP_10_LEAGUE_PLAYERS.find(p => p.id === 'saka') || null,
-  ]);
+  const [squadSlots, setSquadSlots] = useState<Array<FootballPlayer | null>>(() =>
+    buildDefaultSquadSlots(TOP_10_LEAGUE_PLAYERS)
+  );
+
+  // Hydrate leagues & live player pool from backend APIs
+  useEffect(() => {
+    fetchLiveLeagues();
+    fetch('/api/football/players?sort=rating')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (Array.isArray(data?.players) && data.players.length > 0) {
+          setApiPlayers(data.players);
+          setTacticalDrawerPlayers(data.players);
+        }
+      })
+      .catch(() => {});
+  }, [fetchLiveLeagues]);
+
+  useEffect(() => {
+    if (dedicatedPage === 'leagues') {
+      fetchLiveLeagues();
+    }
+  }, [dedicatedPage, fetchLiveLeagues]);
+
+  // Debounced live search in Tactical Board slot assignment drawer
+  useEffect(() => {
+    if (selectedSlotIndex === null) return;
+    const trimmed = tacticalSearch.trim();
+    if (!trimmed) {
+      setTacticalDrawerPlayers(apiPlayers);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setTacticalDrawerLoading(true);
+      try {
+        const res = await fetch(`/api/football/players?query=${encodeURIComponent(trimmed)}&sort=rating`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.players)) {
+            setTacticalDrawerPlayers(data.players);
+          }
+        }
+      } catch {}
+      setTacticalDrawerLoading(false);
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [tacticalSearch, selectedSlotIndex, apiPlayers]);
 
   const handleAssignPlayer = (player: FootballPlayer) => {
     if (selectedSlotIndex === null) return;
@@ -113,6 +212,7 @@ export const MenuTab: React.FC = () => {
     newSlots[selectedSlotIndex] = player;
     setSquadSlots(newSlots);
     setSelectedSlotIndex(null);
+    setTacticalSearch('');
   };
 
   const handleSaveLineup = () => {
@@ -126,21 +226,56 @@ export const MenuTab: React.FC = () => {
   };
 
   // -------------------------------------------------------------
-  // FEATURE 2: SCOUT CATALOG SEARCH & FILTERS
+  // FEATURE 2: REAL-TIME SCOUT CATALOG SEARCH & LIVE HYDRATION
   // -------------------------------------------------------------
   const [scoutSearch, setScoutSearch] = useState('');
   const [scoutPositionFilter, setScoutPositionFilter] = useState<'ALL' | 'FW' | 'MF' | 'DF' | 'GK'>('ALL');
+  const [scoutResults, setScoutResults] = useState<FootballPlayer[]>(TOP_10_LEAGUE_PLAYERS);
+  const [scoutLoading, setScoutLoading] = useState(false);
   const [selectedScoutPlayer, setSelectedScoutPlayer] = useState<FootballPlayer | null>(null);
+  const [loadingPlayerDetail, setLoadingPlayerDetail] = useState(false);
 
-  const filteredPlayers = TOP_10_LEAGUE_PLAYERS.filter(p => {
-    const matchesQuery =
-      p.name.toLowerCase().includes(scoutSearch.toLowerCase()) ||
-      p.club.toLowerCase().includes(scoutSearch.toLowerCase()) ||
-      p.nationality.toLowerCase().includes(scoutSearch.toLowerCase());
-    const matchesPosition =
-      scoutPositionFilter === 'ALL' || p.position.toUpperCase() === scoutPositionFilter;
-    return matchesQuery && matchesPosition;
-  });
+  const fetchScoutPlayers = useCallback(async (q: string, pos: 'ALL' | 'FW' | 'MF' | 'DF' | 'GK') => {
+    setScoutLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (q.trim()) params.set('query', q.trim());
+      if (pos !== 'ALL') params.set('position', pos);
+      params.set('sort', 'rating');
+      const res = await fetch(`/api/football/players?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.players)) {
+          setScoutResults(data.players);
+        }
+      }
+    } catch {}
+    setScoutLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (dedicatedPage !== 'scout') return;
+    const timer = setTimeout(() => {
+      fetchScoutPlayers(scoutSearch, scoutPositionFilter);
+    }, 260);
+    return () => clearTimeout(timer);
+  }, [dedicatedPage, scoutSearch, scoutPositionFilter, fetchScoutPlayers]);
+
+  const handleSelectScoutPlayer = async (player: FootballPlayer) => {
+    haptics.light();
+    setSelectedScoutPlayer(player);
+    setLoadingPlayerDetail(true);
+    try {
+      const res = await fetch(`/api/football/player/${encodeURIComponent(player.id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.player) {
+          setSelectedScoutPlayer(data.player);
+        }
+      }
+    } catch {}
+    setLoadingPlayerDetail(false);
+  };
 
   return (
     <div className="pb-24 max-w-2xl mx-auto px-3 sm:px-4 pt-3 space-y-4">
@@ -261,7 +396,7 @@ export const MenuTab: React.FC = () => {
                   Player Scout
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-white/55">
-                  30 registered global stars database
+                  Real-time global &amp; Top 10 league players
                 </p>
               </div>
             </button>
@@ -383,6 +518,23 @@ export const MenuTab: React.FC = () => {
                 <span className="font-extrabold text-slate-800 dark:text-white">Fan Communities ({communities.length})</span>
               </div>
               <ChevronRight className="w-4 h-4 text-slate-400" />
+            </button>
+
+            <button
+              onClick={() => {
+                haptics.light();
+                setActiveTab('share');
+              }}
+              className="w-full flex items-center justify-between p-2.5 hover:bg-emerald-500/10 rounded-2xl transition-all"
+            >
+              <div className="flex items-center gap-2.5">
+                <Smartphone className="w-4 h-4 text-[#00E676]" />
+                <span className="font-extrabold text-slate-800 dark:text-white">Share App &amp; Connect to Phone</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-emerald-700 dark:text-[#00E676]">SMS · QR</span>
+                <ChevronRight className="w-4 h-4 text-slate-400" />
+              </div>
             </button>
 
             <button
@@ -722,37 +874,60 @@ export const MenuTab: React.FC = () => {
               <div className="p-3 rounded-2xl bg-slate-50 dark:bg-black/50 border border-[#00E676]/40 space-y-2 animate-in fade-in">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-extrabold text-slate-900 dark:text-white">
-                    Assign Player to Position #{selectedSlotIndex + 1}
+                    Assign {formationPositions[formation]?.[selectedSlotIndex] || 'Player'} (Slot #{selectedSlotIndex + 1})
                   </span>
                   <button
-                    onClick={() => setSelectedSlotIndex(null)}
-                    className="text-slate-400 hover:text-black dark:hover:text-white font-bold"
+                    onClick={() => {
+                      setSelectedSlotIndex(null);
+                      setTacticalSearch('');
+                    }}
+                    className="min-h-[36px] min-w-[36px] flex items-center justify-center text-slate-400 hover:text-black dark:hover:text-white font-bold"
                   >
                     ✕
                   </button>
                 </div>
+                <input
+                  type="text"
+                  value={tacticalSearch}
+                  onChange={e => setTacticalSearch(e.target.value)}
+                  placeholder="Search live players or club..."
+                  className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-white dark:bg-black/60 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-[#00E676]"
+                />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-48 overflow-y-auto no-scrollbar pt-1">
-                  {TOP_10_LEAGUE_PLAYERS.map(player => (
-                    <button
-                      key={player.id}
-                      onClick={() => handleAssignPlayer(player)}
-                      className="flex items-center gap-2 p-1.5 rounded-xl bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 hover:border-[#00E676] text-left transition-all"
-                    >
-                      <img
-                        src={player.photoUrl}
-                        alt={player.name}
-                        className="w-7 h-7 rounded-full object-cover shrink-0"
-                      />
-                      <div className="truncate min-w-0">
-                        <span className="font-bold text-[11px] text-slate-800 dark:text-white truncate block">
-                          {player.shortName}
-                        </span>
-                        <span className="text-[9px] text-slate-400 block truncate">
-                          {player.position} · {player.club}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+                  {tacticalDrawerLoading ? (
+                    <div className="col-span-full py-4 text-center text-[11px] text-slate-400">
+                      Searching live FotMob player pool...
+                    </div>
+                  ) : tacticalDrawerPlayers.length === 0 ? (
+                    <div className="col-span-full py-4 text-center text-[11px] text-slate-400">
+                      No matching players found.
+                    </div>
+                  ) : (
+                    tacticalDrawerPlayers.slice(0, 30).map(player => (
+                      <button
+                        key={player.id}
+                        onClick={() => handleAssignPlayer(player)}
+                        className="flex items-center gap-2 p-1.5 rounded-xl bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 hover:border-[#00E676] text-left transition-all"
+                      >
+                        <img
+                          src={player.photoUrl}
+                          alt={player.name}
+                          onError={e => {
+                            (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/IMG-20261101-WA4554_bacdb901.jpg';
+                          }}
+                          className="w-7 h-7 rounded-full object-cover shrink-0"
+                        />
+                        <div className="truncate min-w-0">
+                          <span className="font-bold text-[11px] text-slate-800 dark:text-white truncate block">
+                            {player.shortName}
+                          </span>
+                          <span className="text-[9px] text-slate-400 block truncate">
+                            {player.position} · {player.club}
+                          </span>
+                        </div>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -761,51 +936,71 @@ export const MenuTab: React.FC = () => {
       )}
 
       {/* ============================================================= */}
-      {/* SUB-PAGE 2: TOP 10 LEAGUES RADAR */}
+      {/* SUB-PAGE 2: TOP 10 LEAGUES RADAR (LIVE API SYNC) */}
       {/* ============================================================= */}
       {dedicatedPage === 'leagues' && (
         <div className="p-4 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm space-y-3">
-          <div>
-            <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-              <Globe className="w-4 h-4 text-[#00E676]" />
-              Official Top 10 Leagues Radar
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-white/50">
-              Live tournament coverage powered by FotMob global network
-            </p>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                <Globe className="w-4 h-4 text-[#00E676]" />
+                Official Top 10 Leagues Radar
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-white/50">
+                Real-time standings &amp; live fixture counts · {leaguesSyncedAt ? 'Live Synced' : 'FotMob Network'}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                haptics.light();
+                fetchLiveLeagues();
+              }}
+              disabled={leaguesLoading}
+              aria-label="Refresh Top 10 Leagues"
+              className="min-h-[38px] px-2.5 rounded-xl bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-white/80 text-xs font-bold flex items-center gap-1 hover:bg-emerald-500/15"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${leaguesLoading ? 'animate-spin text-[#00E676]' : ''}`} />
+              <span>Sync</span>
+            </button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-            {TOP_10_LEAGUES.map(league => (
+            {liveLeagues.map(league => (
               <div
                 key={league.id}
-                className="p-3 rounded-2xl bg-slate-50 dark:bg-white/[0.02] border border-slate-100 dark:border-white/5 flex items-center justify-between"
+                className="p-3 rounded-2xl bg-slate-50 dark:bg-white/[0.02] border border-slate-100 dark:border-white/5 flex items-center justify-between gap-2"
               >
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xl">{league.flag}</span>
-                  <div>
-                    <h4 className="font-extrabold text-xs text-slate-900 dark:text-white">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="text-xl shrink-0">{league.flag}</span>
+                  <div className="min-w-0">
+                    <h4 className="font-extrabold text-xs text-slate-900 dark:text-white truncate">
                       {league.name}
                     </h4>
-                    <span className="text-[10px] text-slate-500 dark:text-white/50">
+                    <span className="text-[10px] text-slate-500 dark:text-white/50 block truncate tabular-nums">
                       {league.country} · {league.clubsCount} Clubs
+                      {(league.liveCount || 0) > 0 && (
+                        <strong className="text-rose-500 ml-1">· {league.liveCount} LIVE</strong>
+                      )}
+                      {(league.liveCount || 0) === 0 && (league.todayCount || 0) > 0 && (
+                        <strong className="text-emerald-600 dark:text-[#00E676] ml-1">· {league.todayCount} Today</strong>
+                      )}
                     </span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     onClick={() => fetchLeagueTable(league.id, league.name)}
-                    className="px-2.5 py-1 rounded-xl bg-[#00E676] text-black font-extrabold text-[10px] transition-all hover:bg-emerald-400"
+                    className="min-h-[36px] px-2.5 py-1 rounded-xl bg-[#00E676] text-black font-extrabold text-[10px] transition-all hover:bg-emerald-400"
                   >
-                    View Table
+                    Table
                   </button>
                   <button
                     onClick={() => {
                       haptics.light();
                       setActiveTab('scores');
                     }}
-                    className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white/80 font-bold text-[10px] transition-all hover:bg-slate-200 dark:hover:bg-white/20"
+                    className="min-h-[36px] px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white/80 font-bold text-[10px] transition-all hover:bg-slate-200 dark:hover:bg-white/20"
                   >
                     Fixtures
                   </button>
@@ -827,12 +1022,13 @@ export const MenuTab: React.FC = () => {
                   {selectedLeagueTable.leagueName} Standings
                 </h3>
                 <span className="text-[10px] text-slate-500 dark:text-white/50">
-                  Live table, points & goals gap powered by FotMob
+                  {selectedLeagueTable.source || 'Live table, points & goals gap'}
                 </span>
               </div>
               <button
                 onClick={() => setSelectedLeagueTable(null)}
-                className="p-1.5 rounded-full text-slate-400 hover:text-white font-bold"
+                aria-label="Close standings"
+                className="min-h-[38px] min-w-[38px] rounded-full flex items-center justify-center text-slate-400 hover:text-slate-900 dark:hover:text-white font-bold"
               >
                 ✕
               </button>
@@ -841,7 +1037,18 @@ export const MenuTab: React.FC = () => {
             <div className="flex-1 overflow-y-auto py-3 space-y-1.5 no-scrollbar">
               {loadingTable ? (
                 <div className="p-8 text-center text-xs text-slate-400 animate-pulse">
-                  Loading live table standings from global feed...
+                  Loading real-time standings from live league API...
+                </div>
+              ) : selectedLeagueTable.error ? (
+                <div className="p-6 text-center space-y-3">
+                  <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
+                  <p className="text-xs text-slate-600 dark:text-white/75">{selectedLeagueTable.error}</p>
+                  <button
+                    onClick={() => fetchLeagueTable(selectedLeagueTable.leagueId, selectedLeagueTable.leagueName)}
+                    className="min-h-[40px] px-4 py-2 rounded-xl bg-[#00E676] text-black text-xs font-extrabold"
+                  >
+                    Retry Live Feed
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -862,14 +1069,26 @@ export const MenuTab: React.FC = () => {
                     return (
                       <div
                         key={idx}
-                        className="grid grid-cols-12 gap-1 px-3 py-2 text-xs items-center rounded-xl bg-slate-50 dark:bg-white/[0.02] border border-slate-100 dark:border-white/5"
+                        className="grid grid-cols-12 gap-1 px-3 py-2 text-xs items-center rounded-xl bg-slate-50 dark:bg-white/[0.02] border border-slate-100 dark:border-white/5 tabular-nums"
                       >
                         <span className="col-span-1 font-mono font-bold text-center text-slate-500">
                           {row.position}
                         </span>
-                        <span className="col-span-4 font-extrabold text-slate-900 dark:text-white truncate">
-                          {row.teamName}
-                        </span>
+                        <div className="col-span-4 flex items-center gap-1.5 min-w-0">
+                          {row.logoUrl && (
+                            <img
+                              src={row.logoUrl}
+                              alt={row.teamName}
+                              className="w-4 h-4 object-contain shrink-0"
+                              onError={e => {
+                                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                              }}
+                            />
+                          )}
+                          <span className="font-extrabold text-slate-900 dark:text-white truncate">
+                            {row.teamName}
+                          </span>
+                        </div>
                         <span className="col-span-1 font-mono text-center text-slate-600 dark:text-white/70">
                           {row.played}
                         </span>
@@ -882,7 +1101,7 @@ export const MenuTab: React.FC = () => {
                         <span className="col-span-1 font-mono text-center text-[11px] font-bold text-amber-500 dark:text-amber-400">
                           {gap === 0 ? '—' : `-${gap}`}
                         </span>
-                        <span className="col-span-2 font-mono text-right font-black text-[#00E676]">
+                        <span className="col-span-2 font-mono text-right font-black text-emerald-700 dark:text-[#00E676]">
                           {row.points}
                         </span>
                       </div>
@@ -896,35 +1115,49 @@ export const MenuTab: React.FC = () => {
       )}
 
       {/* ============================================================= */}
-      {/* SUB-PAGE 3: OFFICIAL PLAYER SCOUT */}
+      {/* SUB-PAGE 3: REAL-TIME PLAYER SCOUT */}
       {/* ============================================================= */}
       {dedicatedPage === 'scout' && (
         <div className="p-4 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm space-y-3">
-          <div>
-            <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-              <Search className="w-4 h-4 text-[#00E676]" />
-              Verified Player Scout Database
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-white/50">
-              30 top registered European and world stars with real stats
-            </p>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+                <Search className="w-4 h-4 text-[#00E676]" />
+                Real-Time Global Player Scout
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-white/50">
+                Search live FotMob players, active matchday scorers &amp; Top 10 league stars
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                haptics.light();
+                setPlayerScoutModalOpen(true);
+              }}
+              className="min-h-[36px] px-2.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-[#00E676] text-[11px] font-extrabold whitespace-nowrap"
+            >
+              Compare Tool
+            </button>
           </div>
 
           {/* Search & Position Pills */}
           <div className="space-y-2">
             <input
               type="text"
-              placeholder="Search player, club, or nationality..."
+              placeholder="Search any footballer worldwide (e.g. Saka, Yamal, Osimhen, Palmer)..."
               value={scoutSearch}
               onChange={e => setScoutSearch(e.target.value)}
-              className="w-full px-3 py-2 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none"
+              className="w-full min-h-[42px] px-3 py-2 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-[#00E676]"
             />
             <div className="flex items-center gap-1">
               {(['ALL', 'FW', 'MF', 'DF', 'GK'] as const).map(pos => (
                 <button
                   key={pos}
-                  onClick={() => setScoutPositionFilter(pos)}
-                  className={`flex-1 py-1 rounded-xl text-xs font-bold transition-all ${
+                  onClick={() => {
+                    haptics.light();
+                    setScoutPositionFilter(pos);
+                  }}
+                  className={`flex-1 min-h-[36px] py-1 rounded-xl text-xs font-bold transition-all ${
                     scoutPositionFilter === pos
                       ? 'bg-[#00E676] text-black font-extrabold'
                       : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-white/60'
@@ -938,85 +1171,117 @@ export const MenuTab: React.FC = () => {
 
           {/* Player Cards Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 max-h-[500px] overflow-y-auto no-scrollbar">
-            {filteredPlayers.map(player => (
-              <div
-                key={player.id}
-                onClick={() => setSelectedScoutPlayer(player)}
-                className="p-3 rounded-2xl bg-slate-50 dark:bg-white/[0.02] border border-slate-100 dark:border-white/5 flex items-center gap-3 cursor-pointer hover:border-[#00E676]/40 transition-all"
-              >
-                <img
-                  src={player.photoUrl}
-                  alt={player.name}
-                  className="w-11 h-11 rounded-2xl object-cover shrink-0"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <h5 className="font-display font-extrabold text-xs text-slate-900 dark:text-white truncate">
-                      {player.name}
-                    </h5>
-                    <span className="text-xs font-black text-emerald-700 dark:text-[#00E676] font-mono tabular-nums">
-                      {player.rating}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-[10px] text-slate-500 dark:text-white/55 mt-0.5 tabular-nums">
-                    <span>{player.position}</span>
-                    <span>·</span>
-                    <span className="truncate">{player.club}</span>
-                    <span>·</span>
-                    <span>{player.marketValue}</span>
+            {scoutLoading ? (
+              <div className="col-span-full py-10 text-center text-xs text-slate-400 animate-pulse">
+                Fetching real-time players from backend scout API...
+              </div>
+            ) : scoutResults.length === 0 ? (
+              <div className="col-span-full py-10 text-center text-xs text-slate-400">
+                No matching players found. Try another surname or club!
+              </div>
+            ) : (
+              scoutResults.map(player => (
+                <div
+                  key={player.id}
+                  onClick={() => handleSelectScoutPlayer(player)}
+                  className="p-3 rounded-2xl bg-slate-50 dark:bg-white/[0.02] border border-slate-100 dark:border-white/5 flex items-center gap-3 cursor-pointer hover:border-[#00E676]/40 transition-all"
+                >
+                  <img
+                    src={player.photoUrl}
+                    alt={player.name}
+                    onError={e => {
+                      (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/IMG-20261101-WA4554_bacdb901.jpg';
+                    }}
+                    className="w-11 h-11 rounded-2xl object-cover shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-1">
+                      <h5 className="font-display font-extrabold text-xs text-slate-900 dark:text-white truncate">
+                        {player.name}
+                      </h5>
+                      <span className="text-xs font-black text-emerald-700 dark:text-[#00E676] font-mono tabular-nums shrink-0">
+                        {player.rating}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-white/55 mt-0.5 tabular-nums truncate">
+                      <span>{player.position}</span>
+                      <span>·</span>
+                      <span className="truncate">{player.club}</span>
+                      <span>·</span>
+                      <span className="shrink-0">{player.stats?.goals ?? 0}G {player.stats?.assists ?? 0}A</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
 
-          {/* Player Detail Modal */}
+          {/* Live Player Detail Card */}
           {selectedScoutPlayer && (
             <div className="p-4 rounded-3xl bg-slate-50 dark:bg-black/80 border border-emerald-500/40 dark:border-[#00E676]/40 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
                   <img
                     src={selectedScoutPlayer.photoUrl}
                     alt={selectedScoutPlayer.name}
-                    className="w-12 h-12 rounded-2xl object-cover"
+                    onError={e => {
+                      (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/IMG-20261101-WA4554_bacdb901.jpg';
+                    }}
+                    className="w-12 h-12 rounded-2xl object-cover shrink-0"
                   />
-                  <div>
-                    <h4 className="font-display font-extrabold text-sm text-slate-900 dark:text-white">
+                  <div className="min-w-0">
+                    <h4 className="font-display font-extrabold text-sm text-slate-900 dark:text-white truncate">
                       {selectedScoutPlayer.name}
                     </h4>
-                    <span className="text-xs text-emerald-700 dark:text-[#00E676] font-bold">
-                      {selectedScoutPlayer.club} · {selectedScoutPlayer.nationality}
+                    <span className="text-xs text-emerald-700 dark:text-[#00E676] font-bold block truncate">
+                      {selectedScoutPlayer.club} · {selectedScoutPlayer.league}
                     </span>
                   </div>
                 </div>
                 <button
                   onClick={() => setSelectedScoutPlayer(null)}
-                  className="min-h-[36px] min-w-[36px] rounded-full flex items-center justify-center text-xs font-bold text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                  className="min-h-[36px] min-w-[36px] rounded-full flex items-center justify-center text-xs font-bold text-slate-400 hover:text-slate-900 dark:hover:text-white shrink-0"
                 >
                   ✕
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              {loadingPlayerDetail && (
+                <div className="text-[11px] text-emerald-700 dark:text-[#00E676] font-semibold animate-pulse">
+                  Syncing live season stats from FotMob...
+                </div>
+              )}
+
+              <div className="grid grid-cols-4 gap-2 text-center text-xs tabular-nums">
                 <div className="p-2 rounded-xl bg-white dark:bg-white/5">
                   <span className="text-[10px] text-slate-400 block">Rating</span>
-                  <span className="font-black text-slate-900 dark:text-white font-mono tabular-nums text-base">
+                  <span className="font-black text-slate-900 dark:text-white font-mono text-sm">
                     {selectedScoutPlayer.rating}
                   </span>
                 </div>
                 <div className="p-2 rounded-xl bg-white dark:bg-white/5">
+                  <span className="text-[10px] text-slate-400 block">Apps</span>
+                  <span className="font-black text-emerald-600 dark:text-[#00E676] font-mono text-sm">
+                    {selectedScoutPlayer.stats?.appearances ?? 0}
+                  </span>
+                </div>
+                <div className="p-2 rounded-xl bg-white dark:bg-white/5">
                   <span className="text-[10px] text-slate-400 block">Goals</span>
-                  <span className="font-black text-rose-500 font-mono tabular-nums text-base">
+                  <span className="font-black text-rose-500 font-mono text-sm">
                     {selectedScoutPlayer.stats?.goals ?? 0}
                   </span>
                 </div>
                 <div className="p-2 rounded-xl bg-white dark:bg-white/5">
                   <span className="text-[10px] text-slate-400 block">Assists</span>
-                  <span className="font-black text-blue-500 font-mono tabular-nums text-base">
+                  <span className="font-black text-blue-500 font-mono text-sm">
                     {selectedScoutPlayer.stats?.assists ?? 0}
                   </span>
                 </div>
               </div>
+
+              <p className="text-[11px] text-slate-600 dark:text-white/70 leading-relaxed">
+                {selectedScoutPlayer.playingStyle} · Foot: {selectedScoutPlayer.preferredFoot} · {selectedScoutPlayer.bio}
+              </p>
             </div>
           )}
         </div>

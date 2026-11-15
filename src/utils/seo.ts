@@ -88,6 +88,7 @@ export function resolvePathFromAppState(params: {
     return '/support';
   }
   if (params.activeTab === 'reviews') return '/reviews';
+  if (params.activeTab === 'share') return '/share';
   if (params.activeTab === 'videos') return '/highlights';
   if (params.activeTab === 'communities') return '/communities';
   return '/';
@@ -131,6 +132,16 @@ export function buildRouteSeoConfig(params: {
       description:
         'Read real user reviews of Futfield and publish your own football opinion blog post or app rating completely free.',
       keywords: `Futfield reviews, football app reviews, fan opinion blog, ${DEFAULT_SEO_KEYWORDS}`,
+    };
+  }
+
+  if (params.activeTab === 'share') {
+    return {
+      path: '/share',
+      title: clampTitle('Share Futfield to Phone | SMS, WhatsApp & QR Connect'),
+      description:
+        'Connect and share Futfield highlights, profiles, and live scores directly to any iPhone or Android phone via SMS, WhatsApp, or QR scan.',
+      keywords: `share Futfield, football app invite, live match share, ${DEFAULT_SEO_KEYWORDS}`,
     };
   }
 

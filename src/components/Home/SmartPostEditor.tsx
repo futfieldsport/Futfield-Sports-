@@ -20,6 +20,10 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
+import yamalActionImg from '../../assets/images/football_yamal_barca_action_1793565483066.jpg';
+import haalandActionImg from '../../assets/images/football_haaland_city_action_1793565357245.jpg';
+import viniciusActionImg from '../../assets/images/football_vinicius_madrid_action_1793565356644.jpg';
+import stadiumAtmosphereImg from '../../assets/images/football_stadium_atmosphere_1793565356976.jpg';
 
 interface SmartPostEditorProps {
   onClose?: () => void;
@@ -68,10 +72,10 @@ export const SmartPostEditor: React.FC<SmartPostEditorProps> = ({
 
   // Available Match Action Photos
   const samplePhotos = [
-    { label: 'Yamal Strike', url: '/src/assets/images/football_yamal_barca_action_1793565483066.jpg' },
-    { label: 'Haaland Celebration', url: '/src/assets/images/football_haaland_city_action_1793565357245.jpg' },
-    { label: 'Vinicius Attack', url: '/src/assets/images/football_vinicius_madrid_action_1793565356644.jpg' },
-    { label: 'Cathedral Stadium', url: '/src/assets/images/football_stadium_atmosphere_1793565356976.jpg' },
+    { label: 'Yamal Strike', url: yamalActionImg },
+    { label: 'Haaland Celebration', url: haalandActionImg },
+    { label: 'Vinicius Attack', url: viniciusActionImg },
+    { label: 'Cathedral Stadium', url: stadiumAtmosphereImg },
   ];
 
   const toneOptions: { id: ToneType; label: string; icon: string; desc: string }[] = [

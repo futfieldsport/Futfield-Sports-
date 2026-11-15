@@ -43,7 +43,13 @@ import { Post, VideoItem, Match } from '../../types/football';
 import { ClubLogo } from '../Common/ClubLogo';
 import { MonetizationModal } from '../Monetization/MonetizationModal';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
-import { uploadFileToBackend, formatBytesToMb } from '../../utils/mediaUpload';
+import {
+  uploadFileToBackend,
+  formatBytesToMb,
+  inspectVideoMetadata,
+  captureVideoPosterFrame,
+} from '../../utils/mediaUpload';
+import { buildShareUrl } from '../../utils/share';
 import { haptics } from '../../utils/haptics';
 
 export const FutfieldStudioTab: React.FC = () => {
@@ -60,6 +66,8 @@ export const FutfieldStudioTab: React.FC = () => {
     addVideo,
     addPost,
     refreshMediaAndAnalytics,
+    openShareSheet,
+    openVideoInReels,
   } = useFootball();
 
   // Studio Sub-Navigation Tabs matching YouTube Studio structure
@@ -83,6 +91,12 @@ export const FutfieldStudioTab: React.FC = () => {
   const [newVideoTitle, setNewVideoTitle] = useState('');
   const [newVideoDesc, setNewVideoDesc] = useState('');
   const [newVideoUrl, setNewVideoUrl] = useState('');
+  const [newVideoThumbUrl, setNewVideoThumbUrl] = useState('');
+  const [studioVideoKind, setStudioVideoKind] = useState<'short' | 'video'>('short');
+  const [studioAspectRatio, setStudioAspectRatio] = useState<'9:16' | '16:9'>('9:16');
+  const [studioDurationSec, setStudioDurationSec] = useState<number>(30);
+  const [studioResolution, setStudioResolution] = useState<string>('');
+  const [lastPublishedVideo, setLastPublishedVideo] = useState<VideoItem | null>(null);
   const [newVideoCategory, setNewVideoCategory] = useState<VideoItem['category']>('highlights');
   const [newVideoClubTag, setNewVideoClubTag] = useState(user.favoriteClub !== 'Not Set' ? user.favoriteClub : 'Arsenal');
   const [newVideoPrivacy, setNewVideoPrivacy] = useState<'public' | 'followers' | 'private'>('public');
@@ -259,6 +273,8 @@ export const FutfieldStudioTab: React.FC = () => {
     setStudioUploadSizeBytes(exactBytes);
     setStudioUploadSizeMb(exactMb);
     setStudioUploadFileName(file.name);
+    setNewVideoUrl('');
+    setNewVideoThumbUrl('');
     setStudioUploadError(null);
     setStudioUploadStatus('uploading');
     setStudioUploadProgress(10);
@@ -267,18 +283,63 @@ export const FutfieldStudioTab: React.FC = () => {
     }
     haptics.light();
 
-    const res = await uploadFileToBackend(
-      file,
-      'videos',
-      file.name,
-      (pct) => setStudioUploadProgress(pct),
-      user.id
-    );
+    const meta = await inspectVideoMetadata(file);
+    if (meta.validationError || meta.videoKind === 'unsupported') {
+      setStudioUploadStatus('error');
+      setStudioUploadProgress(0);
+      setStudioUploadError(
+        meta.validationError ||
+          'Only 9:16 Shorts (≤ 2 min) or 16:9 Videos (≤ 3 min) are permitted.'
+      );
+      return;
+    }
+
+    const detectedKind: 'short' | 'video' = meta.videoKind;
+    const detectedRatio: '9:16' | '16:9' = meta.detectedAspectRatio === '16:9' ? '16:9' : '9:16';
+    setStudioVideoKind(detectedKind);
+    setStudioAspectRatio(detectedRatio);
+    setStudioDurationSec(meta.duration || 30);
+    setStudioResolution(meta.width > 0 && meta.height > 0 ? `${meta.width}x${meta.height}` : '');
+
+    const [res, posterBlob] = await Promise.all([
+      uploadFileToBackend(
+        file,
+        'videos',
+        file.name,
+        (pct) => setStudioUploadProgress(pct),
+        user.id,
+        {
+          durationSeconds: meta.duration,
+          width: meta.width,
+          height: meta.height,
+          videoKind: detectedKind,
+          aspectRatio: detectedRatio,
+          title: newVideoTitle.trim() || file.name,
+          description: newVideoDesc.trim(),
+        }
+      ),
+      captureVideoPosterFrame(file).catch(() => null),
+    ]);
+
+    if (posterBlob) {
+      const thumbRes = await uploadFileToBackend(
+        posterBlob,
+        'video-thumbnails',
+        `${file.name.replace(/\.[^.]+$/, '')}-thumb.jpg`,
+        undefined,
+        user.id
+      ).catch(() => null);
+      if (thumbRes?.success && thumbRes.url) {
+        setNewVideoThumbUrl(thumbRes.url);
+      }
+    }
 
     if (res.success && res.url) {
       setNewVideoUrl(res.url);
       if (res.sizeBytes) setStudioUploadSizeBytes(res.sizeBytes);
       if (res.sizeMb) setStudioUploadSizeMb(res.sizeMb);
+      if (res.videoKind) setStudioVideoKind(res.videoKind);
+      if (res.aspectRatio) setStudioAspectRatio(res.aspectRatio);
       setStudioUploadProgress(100);
       setStudioUploadStatus('uploaded');
       haptics.success();
@@ -289,35 +350,46 @@ export const FutfieldStudioTab: React.FC = () => {
     }
   };
 
-  const handleUploadVideoSubmit = (e: React.FormEvent) => {
+  const handleUploadVideoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newVideoTitle.trim() || !newVideoUrl.trim() || studioUploadStatus === 'uploading') return;
 
     setIsSubmittingUpload(true);
     haptics.success();
 
-    addVideo({
+    const durSec = studioDurationSec || 30;
+    const durFormatted = `${Math.floor(durSec / 60)}:${(durSec % 60).toString().padStart(2, '0')}`;
+
+    const published = await addVideo({
       title: newVideoTitle.trim(),
       description: newVideoDesc.trim() || 'Football tactical video on FUTFIELD',
       videoUrl: newVideoUrl.trim(),
-      thumbnailUrl: '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+      thumbnailUrl: newVideoThumbUrl || undefined,
       clubTag: newVideoClubTag,
       category: newVideoCategory,
       privacy: newVideoPrivacy,
+      duration: durFormatted,
+      durationSeconds: durSec,
+      videoKind: studioVideoKind,
+      aspectRatio: studioAspectRatio,
       sizeBytes: studioUploadSizeBytes || undefined,
       sizeMb: studioUploadSizeMb || undefined,
+      skipAutoNavigate: true,
     });
 
-    addFanPoints(20, 'Uploaded video in Studio');
-    addNotification({
-      title: 'Video Published! (+20 Fan Points)',
-      body: `"${newVideoTitle}" (${studioUploadSizeMb || 0} MB) is now live in PitchReels.`,
-      type: 'system',
-    });
+    if (published) {
+      setLastPublishedVideo(published);
+      addNotification({
+        title: `${studioVideoKind === 'short' ? '9:16 Short' : '16:9 Video'} Live in Studio!`,
+        body: `"${published.title}" is ready to stream & share.`,
+        type: 'video',
+      });
+    }
 
     setNewVideoTitle('');
     setNewVideoDesc('');
     setNewVideoUrl('');
+    setNewVideoThumbUrl('');
     setStudioUploadStatus('idle');
     setStudioUploadSizeBytes(0);
     setStudioUploadSizeMb(0);
@@ -637,6 +709,70 @@ export const FutfieldStudioTab: React.FC = () => {
             </div>
           </div>
 
+          {/* Freshly Published Video Live Showcase Card */}
+          {lastPublishedVideo && (
+            <div className="rounded-3xl bg-slate-950 border border-[#00E676]/40 overflow-hidden shadow-xl">
+              <div className="px-4 py-2.5 bg-[#00E676]/15 border-b border-white/10 flex items-center justify-between text-xs">
+                <span className="font-extrabold text-[#00E676]">
+                  Just Published · {lastPublishedVideo.aspectRatio === '16:9' ? '16:9 Video' : '9:16 Short'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLastPublishedVideo(null)}
+                  className="text-white/60 hover:text-white text-[11px] font-bold"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <div
+                className={`bg-black flex items-center justify-center ${
+                  lastPublishedVideo.aspectRatio === '16:9' ? 'aspect-video w-full' : 'aspect-[9/16] max-h-[340px] mx-auto'
+                }`}
+              >
+                <video
+                  src={lastPublishedVideo.videoUrl}
+                  poster={lastPublishedVideo.thumbnailUrl}
+                  controls
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <div className="p-3.5 text-white space-y-2.5">
+                <div>
+                  <h4 className="font-display font-black text-sm line-clamp-1">{lastPublishedVideo.title}</h4>
+                  <p className="text-[11px] text-white/65 line-clamp-2">
+                    {lastPublishedVideo.duration} · {lastPublishedVideo.sizeMb || 0} MB · {lastPublishedVideo.description}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openVideoInReels(lastPublishedVideo.id)}
+                    className="flex-1 min-h-[42px] px-3 rounded-xl bg-[#00E676] hover:bg-[#00c864] text-black font-black text-xs flex items-center justify-center gap-1.5"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-black" />
+                    <span>Watch in PitchReels</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openShareSheet({
+                      kind: 'video',
+                      targetId: lastPublishedVideo.id,
+                      title: lastPublishedVideo.title,
+                      text: `Watch "${lastPublishedVideo.title}" on FUTFIELD PitchReels!`,
+                      url: buildShareUrl('/highlights'),
+                      previewImage: lastPublishedVideo.thumbnailUrl,
+                    })}
+                    className="min-h-[42px] px-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>Share to Phone</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Videos List */}
           <div className="space-y-2">
             {(contentFilter === 'all' || contentFilter === 'videos') &&
@@ -646,30 +782,52 @@ export const FutfieldStudioTab: React.FC = () => {
                   className="p-3.5 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm space-y-2.5"
                 >
                   <div className="flex items-start gap-3">
-                    <div className="w-16 h-16 rounded-2xl bg-black overflow-hidden relative shrink-0">
-                      <img
-                        src={vid.thumbnailUrl || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
-                        alt={vid.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                      />
+                    <div
+                      onClick={() => openVideoInReels(vid.id)}
+                      className="w-16 h-16 rounded-2xl bg-black overflow-hidden relative shrink-0 cursor-pointer"
+                    >
+                      {vid.thumbnailUrl && !vid.thumbnailUrl.includes('IMG-20261106-WA6972') && !vid.thumbnailUrl.includes('IMG-20261102-WA2735') ? (
+                        <img
+                          src={vid.thumbnailUrl}
+                          alt={vid.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : vid.videoUrl ? (
+                        <video
+                          src={`${vid.videoUrl}#t=0.4`}
+                          preload="metadata"
+                          muted
+                          playsInline
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <img
+                          src={vid.thumbnailUrl}
+                          alt={vid.title}
+                          className="w-full h-full object-cover"
+                        />
+                      )}
                       <span className="absolute bottom-1 right-1 p-0.5 rounded bg-black/80 text-[8px] font-mono text-white">
-                        {vid.duration || '0:45'}
+                        {vid.duration || '0:30'}
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-extrabold text-xs text-slate-900 dark:text-white truncate">
+                      <div className="flex items-center justify-between gap-2">
+                        <h4
+                          onClick={() => openVideoInReels(vid.id)}
+                          className="font-extrabold text-xs text-slate-900 dark:text-white truncate cursor-pointer hover:text-emerald-700 dark:hover:text-[#00E676]"
+                        >
                           {vid.title}
                         </h4>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-[#00E676] font-bold">
-                          {vid.privacy || 'Public'}
+                        <span className="text-[10px] font-bold text-emerald-700 dark:text-[#00E676] shrink-0">
+                          {vid.aspectRatio === '16:9' ? '16:9' : '9:16'} · {vid.privacy || 'Public'}
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-500 dark:text-white/50 truncate mt-0.5">
                         {vid.description}
                       </p>
-                      <div className="flex items-center gap-3 text-[11px] text-slate-600 dark:text-white/60 font-semibold mt-1">
+                      <div className="flex items-center gap-3 text-[11px] text-slate-600 dark:text-white/60 font-semibold mt-1 tabular-nums">
                         <span>{vid.views} views</span>
                         <span>{vid.likes} likes</span>
                         <span>{vid.commentsCount} comments</span>
@@ -680,6 +838,14 @@ export const FutfieldStudioTab: React.FC = () => {
                   <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-white/5 text-xs">
                     <span className="text-[10px] text-slate-400">Uploaded {vid.createdAt || 'Recent'}</span>
                     <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => openVideoInReels(vid.id)}
+                        className="px-2.5 py-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-[#00E676] font-bold text-[11px] flex items-center gap-1"
+                        title="Play in PitchReels"
+                      >
+                        <Play className="w-3 h-3" />
+                        <span>Play</span>
+                      </button>
                       <button
                         onClick={() => {
                           haptics.light();
@@ -697,16 +863,17 @@ export const FutfieldStudioTab: React.FC = () => {
                       </button>
                       <button
                         onClick={() => {
-                          haptics.like();
-                          navigator.clipboard?.writeText(window.location.href);
-                          addNotification({
-                            title: 'Link Copied',
-                            body: `Link to "${vid.title}" copied to clipboard.`,
-                            type: 'system',
+                          openShareSheet({
+                            kind: 'video',
+                            targetId: vid.id,
+                            title: vid.title,
+                            text: `Watch "${vid.title}" (${vid.duration || '0:30'}) on FUTFIELD PitchReels!`,
+                            url: buildShareUrl('/highlights'),
+                            previewImage: vid.thumbnailUrl,
                           });
                         }}
                         className="p-1.5 rounded-xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-700 dark:text-white"
-                        title="Copy share link"
+                        title="Share to phone"
                       >
                         <Share2 className="w-3.5 h-3.5" />
                       </button>
@@ -981,6 +1148,32 @@ export const FutfieldStudioTab: React.FC = () => {
               sizeMb={studioUploadSizeMb}
               errorMessage={studioUploadError}
             />
+
+            {studioUploadStatus === 'uploaded' && newVideoUrl && (
+              <div className="rounded-2xl overflow-hidden bg-slate-950 border border-[#00E676]/40 space-y-2 p-2.5">
+                <div
+                  className={`rounded-xl overflow-hidden bg-black flex items-center justify-center ${
+                    studioVideoKind === 'video' ? 'aspect-video w-full' : 'aspect-[9/16] max-h-52 mx-auto'
+                  }`}
+                >
+                  <video
+                    src={newVideoUrl}
+                    poster={newVideoThumbUrl || undefined}
+                    controls
+                    playsInline
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[11px] font-mono text-white/80 px-1">
+                  <span className="text-[#00E676] font-bold">
+                    {studioVideoKind === 'short' ? '9:16 Short' : '16:9 Video'} · {studioDurationSec}s
+                  </span>
+                  <span>
+                    {studioResolution || 'HD'} · {studioUploadSizeMb} MB
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1">
@@ -1237,14 +1430,14 @@ export const FutfieldStudioTab: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-2">
                         <img
-                          src={c.author.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
-                          alt={c.author.name}
+                          src={c.author?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                          alt={c.author?.name || 'Supporter'}
                           referrerPolicy="no-referrer"
                           className="w-7 h-7 rounded-full object-cover"
                         />
                         <div>
                           <span className="font-extrabold text-xs text-slate-900 dark:text-white">
-                            {c.author.name}
+                            {c.author?.name || 'Supporter'}
                           </span>
                           <span className="text-[10px] text-slate-400 ml-1.5">
                             {c.source} · {c.timestamp}

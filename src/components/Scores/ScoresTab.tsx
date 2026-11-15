@@ -41,6 +41,7 @@ export const ScoresTab: React.FC = () => {
     addFanPoints,
     fetchLiveMatches,
     theme,
+    openShareSheet,
   } = useFootball();
 
   const { triggerVote } = useHaptics();
@@ -51,10 +52,63 @@ export const ScoresTab: React.FC = () => {
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
   const [leagueFilter, setLeagueFilter] = useState<string>('all');
   const [showLeagueFilterMenu, setShowLeagueFilterMenu] = useState(false);
-  const [selectedMatchForDetails, setSelectedMatchForDetails] = useState<Match | null>(null);
+  const [selectedMatchForDetails, setSelectedMatchForDetails] = useState<(Match & { referee?: string }) | null>(null);
   const [matchDetailsTab, setMatchDetailsTab] = useState<'overview' | 'lineups' | 'stats' | 'recap'>('overview');
+  const [loadingMatchDetails, setLoadingMatchDetails] = useState<boolean>(false);
   const [isGeneratingRecap, setIsGeneratingRecap] = useState(false);
   const [aiRecapResult, setAiRecapResult] = useState<string | null>(null);
+
+  const openMatchDetailsModal = async (match: Match) => {
+    haptics.light();
+    setSelectedMatchForDetails(match);
+    setMatchDetailsTab('overview');
+    setAiRecapResult(null);
+    setLoadingMatchDetails(true);
+    try {
+      const res = await fetch(`/api/football/match/${encodeURIComponent(match.id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.match) {
+          setSelectedMatchForDetails(prev =>
+            prev && prev.id === match.id
+              ? {
+                  ...prev,
+                  ...data.match,
+                  homeTeam: { ...prev.homeTeam, ...data.match.homeTeam },
+                  awayTeam: { ...prev.awayTeam, ...data.match.awayTeam },
+                }
+              : prev
+          );
+        }
+      }
+    } catch {
+      // Keep base match details visible silently
+    } finally {
+      setLoadingMatchDetails(false);
+    }
+  };
+
+  const getEventBadge = (ev: MatchEvent) => {
+    switch (ev.type) {
+      case 'penalty_goal':
+        return { icon: '⚽', tag: 'PEN', colorClass: 'text-emerald-600 dark:text-[#00E676]' };
+      case 'own_goal':
+        return { icon: '⚽', tag: 'OG', colorClass: 'text-rose-500' };
+      case 'missed_penalty':
+        return { icon: '❌', tag: 'Missed Pen', colorClass: 'text-rose-500' };
+      case 'yellow_card':
+        return { icon: '🟨', tag: '', colorClass: 'text-amber-500' };
+      case 'red_card':
+        return { icon: '🟥', tag: 'RED', colorClass: 'text-rose-600 dark:text-rose-400' };
+      case 'substitution':
+        return { icon: '🔄', tag: 'SUB', colorClass: 'text-sky-500' };
+      case 'var':
+        return { icon: '📺', tag: 'VAR', colorClass: 'text-purple-500' };
+      case 'goal':
+      default:
+        return { icon: '⚽', tag: '', colorClass: 'text-emerald-600 dark:text-[#00E676]' };
+    }
+  };
 
   // AI Match Prediction state
   const [predictions, setPredictions] = useState<Record<string, any>>({});
@@ -586,11 +640,8 @@ export const ScoresTab: React.FC = () => {
 
                 {/* Scoreboard Block with REAL CLUB LOGOS */}
                 <div
-                  onClick={() => {
-                    setSelectedMatchForDetails(match);
-                    setAiRecapResult(null);
-                  }}
-                  className="px-5 py-3.5 cursor-pointer group hover:bg-slate-50/80 dark:hover:bg-white/[0.02] transition-colors"
+                  onClick={() => openMatchDetailsModal(match)}
+                  className="px-4 sm:px-5 py-3.5 cursor-pointer group hover:bg-slate-50/80 dark:hover:bg-white/[0.02] transition-colors"
                 >
                   <div className="grid grid-cols-7 items-center gap-2">
                     <div className="col-span-3 flex flex-col items-center sm:items-start text-center sm:text-left">
@@ -624,36 +675,68 @@ export const ScoresTab: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Scorer and Events list */}
-                  {match.events.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-slate-100 dark:border-white/5 grid grid-cols-2 gap-2 text-xs">
-                      <div className="space-y-1">
-                        {match.events
-                          .filter(e => e.team === 'home')
-                          .slice(0, 3)
-                          .map(e => (
-                            <div key={e.id} className="flex items-center gap-1.5 text-slate-700 dark:text-white/80">
-                              <span>{e.type === 'goal' ? '⚽' : e.type === 'yellow_card' ? '🟨' : '🟥'}</span>
-                              <span className="truncate">{e.player}</span>
-                              <span className="text-slate-400 dark:text-white/45 font-mono tabular-nums text-[10px]">{e.minute}</span>
-                            </div>
-                          ))}
-                      </div>
+                  {/* Mobile Flashscore-Style Key Match Incidents Preview (Scorers, Penalties, Cards) */}
+                  {match.events && match.events.length > 0 && (() => {
+                    const keyEvents = match.events.filter(
+                      e => e.type !== 'substitution' && e.type !== 'var'
+                    );
+                    const displayEvents = keyEvents.length > 0 ? keyEvents : match.events;
+                    const homeEvents = displayEvents.filter(e => e.team === 'home').slice(0, 4);
+                    const awayEvents = displayEvents.filter(e => e.team === 'away').slice(0, 4);
 
-                      <div className="space-y-1 text-right">
-                        {match.events
-                          .filter(e => e.team === 'away')
-                          .slice(0, 3)
-                          .map(e => (
-                            <div key={e.id} className="flex items-center justify-end gap-1.5 text-slate-700 dark:text-white/80">
-                              <span className="text-slate-400 dark:text-white/45 font-mono tabular-nums text-[10px]">{e.minute}</span>
-                              <span className="truncate">{e.player}</span>
-                              <span>{e.type === 'goal' ? '⚽' : e.type === 'yellow_card' ? '🟨' : '🟥'}</span>
-                            </div>
-                          ))}
+                    if (homeEvents.length === 0 && awayEvents.length === 0) return null;
+
+                    return (
+                      <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-white/5 grid grid-cols-2 gap-2.5 text-[11px]">
+                        <div className="space-y-1 min-w-0">
+                          {homeEvents.map(ev => {
+                            const badge = getEventBadge(ev);
+                            return (
+                              <div key={ev.id} className="flex items-center gap-1 text-slate-700 dark:text-white/85 min-w-0">
+                                <span className="shrink-0">{badge.icon}</span>
+                                <span className="truncate font-semibold">{ev.player}</span>
+                                {badge.tag && (
+                                  <span className={`text-[9px] font-black uppercase shrink-0 ${badge.colorClass}`}>
+                                    {badge.tag}
+                                  </span>
+                                )}
+                                <span className="text-slate-500 dark:text-white/50 font-mono tabular-nums text-[10px] shrink-0">
+                                  {ev.minute}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div className="space-y-1 text-right min-w-0">
+                          {awayEvents.map(ev => {
+                            const badge = getEventBadge(ev);
+                            return (
+                              <div key={ev.id} className="flex items-center justify-end gap-1 text-slate-700 dark:text-white/85 min-w-0">
+                                <span className="text-slate-500 dark:text-white/50 font-mono tabular-nums text-[10px] shrink-0">
+                                  {ev.minute}
+                                </span>
+                                {badge.tag && (
+                                  <span className={`text-[9px] font-black uppercase shrink-0 ${badge.colorClass}`}>
+                                    {badge.tag}
+                                  </span>
+                                )}
+                                <span className="truncate font-semibold">{ev.player}</span>
+                                <span className="shrink-0">{badge.icon}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
+
+                  <div className="mt-2 flex items-center justify-between text-[10px] font-semibold text-slate-500 dark:text-white/45">
+                    <span className="truncate">{match.venue || 'Matchday Stadium'}</span>
+                    <span className="text-emerald-700 dark:text-[#00E676] font-bold shrink-0">
+                      Match Center · Timeline, Stats &amp; XI →
+                    </span>
+                  </div>
                 </div>
 
                 {/* Tactical Win Probability Bar */}
@@ -763,13 +846,18 @@ export const ScoresTab: React.FC = () => {
 
                   <button
                     onClick={() => {
-                      navigator.clipboard?.writeText?.(window.location.href);
-                      addNotification({
-                        title: 'Fixture Shared!',
-                        body: `${match.homeTeam.name} vs ${match.awayTeam.name} link copied.`,
-                        type: 'system',
+                      const path = `/match/${encodeURIComponent(match.id)}`;
+                      const url =
+                        typeof window !== 'undefined' && window.location?.origin
+                          ? `${window.location.origin}${path}`
+                          : `https://futfieldsport.com.ng${path}`;
+                      openShareSheet({
+                        kind: 'match',
+                        targetId: match.id,
+                        title: `${match.homeTeam.name} ${match.homeTeam.score}-${match.awayTeam.score} ${match.awayTeam.name}`,
+                        text: `${match.league} · Follow live match scores & fan room chat on FUTFIELD!`,
+                        url,
                       });
-                      addFanPoints(5, 'Shared match');
                     }}
                     className="min-h-[38px] flex items-center gap-1.5 py-1.5 px-3 rounded-xl hover:bg-slate-200/60 dark:hover:bg-white/10 transition-colors"
                   >
@@ -814,8 +902,18 @@ export const ScoresTab: React.FC = () => {
                 </div>
                 <ClubLogo name={selectedMatchForDetails.awayTeam.name} rawId={selectedMatchForDetails.awayTeam.id} size="lg" />
               </div>
-              <div className="text-xs text-slate-500 dark:text-white/60">
-                {selectedMatchForDetails.venue || 'Football Stadium'} · {selectedMatchForDetails.minute || selectedMatchForDetails.timeStr || 'Kickoff 20:00'}
+              <div className="text-xs text-slate-500 dark:text-white/60 space-y-0.5">
+                <div>
+                  {selectedMatchForDetails.venue || 'Football Stadium'} ·{' '}
+                  <span className="font-mono tabular-nums font-bold text-emerald-700 dark:text-[#00E676]">
+                    {selectedMatchForDetails.minute || selectedMatchForDetails.timeStr || 'Kickoff'}
+                  </span>
+                </div>
+                {selectedMatchForDetails.referee && (
+                  <div className="text-[11px] text-slate-400 dark:text-white/45">
+                    Referee: {selectedMatchForDetails.referee}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -825,9 +923,9 @@ export const ScoresTab: React.FC = () => {
                 <button
                   key={tab}
                   onClick={() => setMatchDetailsTab(tab)}
-                  className={`py-3 capitalize transition-colors ${
+                  className={`min-h-[42px] py-2.5 capitalize transition-colors ${
                     matchDetailsTab === tab
-                      ? 'text-[#00E676] border-b-2 border-[#00E676]'
+                      ? 'text-emerald-700 dark:text-[#00E676] border-b-2 border-[#00E676]'
                       : 'text-slate-500 dark:text-white/50 hover:text-black dark:hover:text-white'
                   }`}
                 >
@@ -837,32 +935,75 @@ export const ScoresTab: React.FC = () => {
             </div>
 
             {/* Tab Body Content */}
-            <div className="p-4 overflow-y-auto space-y-3 max-h-80 no-scrollbar">
+            <div className="p-4 overflow-y-auto space-y-3 max-h-[48vh] no-scrollbar">
               {matchDetailsTab === 'overview' && (
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-slate-400 dark:text-white/60 uppercase">Match Timeline</div>
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-500 dark:text-white/60 uppercase">
+                      Match Incidents Timeline
+                    </span>
+                    {loadingMatchDetails && (
+                      <span className="text-[10px] font-bold text-emerald-600 dark:text-[#00E676] animate-pulse">
+                        Syncing Flashscore feed...
+                      </span>
+                    )}
+                  </div>
+
                   {selectedMatchForDetails.events.length === 0 ? (
-                    <div className="text-xs text-slate-400 dark:text-white/40 italic py-4 text-center">
-                      No events recorded yet. Kickoff approaching!
+                    <div className="text-xs text-slate-400 dark:text-white/45 italic py-6 text-center">
+                      {loadingMatchDetails
+                        ? 'Fetching scorers, cards & incidents...'
+                        : 'No incidents recorded yet. Kickoff updates stream here automatically.'}
                     </div>
                   ) : (
-                    selectedMatchForDetails.events.map(ev => (
-                      <div
-                        key={ev.id}
-                        className="p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5 flex items-center justify-between text-xs"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span>{ev.type === 'goal' ? '⚽' : ev.type === 'yellow_card' ? '🟨' : '🟥'}</span>
-                          <span className="font-semibold text-slate-800 dark:text-white">{ev.player}</span>
-                          {ev.assist && (
-                            <span className="text-[10px] text-slate-400 dark:text-white/40">
-                              (ast. {ev.assist})
+                    <div className="space-y-1.5">
+                      {selectedMatchForDetails.events.map(ev => {
+                        const badge = getEventBadge(ev);
+                        const isHome = ev.team === 'home';
+                        const teamShort = isHome
+                          ? selectedMatchForDetails.homeTeam.shortName || selectedMatchForDetails.homeTeam.name
+                          : selectedMatchForDetails.awayTeam.shortName || selectedMatchForDetails.awayTeam.name;
+
+                        return (
+                          <div
+                            key={ev.id}
+                            className={`p-2.5 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-100 dark:border-white/5 flex items-center justify-between gap-2 text-xs ${
+                              isHome ? 'flex-row' : 'flex-row-reverse text-right'
+                            }`}
+                          >
+                            <div className={`flex items-center gap-2 min-w-0 ${isHome ? '' : 'flex-row-reverse'}`}>
+                              <span className="text-sm shrink-0">{badge.icon}</span>
+                              <div className="min-w-0">
+                                <div className={`flex items-center gap-1.5 flex-wrap ${isHome ? '' : 'justify-end'}`}>
+                                  <span className="font-bold text-slate-900 dark:text-white truncate">
+                                    {ev.player}
+                                  </span>
+                                  {badge.tag && (
+                                    <span className={`text-[10px] font-black uppercase ${badge.colorClass}`}>
+                                      {badge.tag}
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-semibold text-slate-400 dark:text-white/45">
+                                    ({teamShort})
+                                  </span>
+                                </div>
+                                {ev.assist && (
+                                  <div className="text-[10px] text-slate-500 dark:text-white/55">
+                                    {ev.type === 'substitution' ? `Replaced: ${ev.assist}` : `Assist: ${ev.assist}`}
+                                  </div>
+                                )}
+                                {ev.detail && !ev.assist && (
+                                  <div className="text-[10px] text-slate-500 dark:text-white/55">{ev.detail}</div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="font-mono tabular-nums font-black text-emerald-700 dark:text-[#00E676] shrink-0 px-2 py-0.5 rounded-md bg-emerald-500/10">
+                              {ev.minute}
                             </span>
-                          )}
-                        </div>
-                        <span className="font-mono font-bold text-[#00E676]">{ev.minute}</span>
-                      </div>
-                    ))
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               )}
@@ -870,29 +1011,181 @@ export const ScoresTab: React.FC = () => {
               {matchDetailsTab === 'stats' && (
                 <div className="space-y-3">
                   {[
-                    { label: 'Ball Possession', home: `${selectedMatchForDetails.stats.possession[0]}%`, away: `${selectedMatchForDetails.stats.possession[1]}%` },
-                    { label: 'Total Shots', home: selectedMatchForDetails.stats.shots[0], away: selectedMatchForDetails.stats.shots[1] },
-                    { label: 'Shots on Target', home: selectedMatchForDetails.stats.shotsOnTarget[0], away: selectedMatchForDetails.stats.shotsOnTarget[1] },
-                    { label: 'Corner Kicks', home: selectedMatchForDetails.stats.corners[0], away: selectedMatchForDetails.stats.corners[1] },
-                    { label: 'Fouls Committed', home: selectedMatchForDetails.stats.fouls[0], away: selectedMatchForDetails.stats.fouls[1] },
-                    { label: 'Yellow Cards', home: selectedMatchForDetails.stats.yellowCards[0], away: selectedMatchForDetails.stats.yellowCards[1] },
-                  ].map((stat, i) => (
-                    <div key={i} className="space-y-1">
-                      <div className="flex justify-between text-xs font-semibold text-slate-700 dark:text-white/80">
-                        <span>{stat.home}</span>
-                        <span className="text-slate-400 dark:text-white/50">{stat.label}</span>
-                        <span>{stat.away}</span>
+                    {
+                      label: 'Ball Possession',
+                      hVal: selectedMatchForDetails.stats?.possession?.[0] ?? 50,
+                      aVal: selectedMatchForDetails.stats?.possession?.[1] ?? 50,
+                      hDisplay: `${selectedMatchForDetails.stats?.possession?.[0] ?? 50}%`,
+                      aDisplay: `${selectedMatchForDetails.stats?.possession?.[1] ?? 50}%`,
+                    },
+                    ...(selectedMatchForDetails.stats?.xg
+                      ? [
+                          {
+                            label: 'Expected Goals (xG)',
+                            hVal: Number(selectedMatchForDetails.stats.xg[0] || 0),
+                            aVal: Number(selectedMatchForDetails.stats.xg[1] || 0),
+                            hDisplay: Number(selectedMatchForDetails.stats.xg[0] || 0).toFixed(2),
+                            aDisplay: Number(selectedMatchForDetails.stats.xg[1] || 0).toFixed(2),
+                          },
+                        ]
+                      : []),
+                    {
+                      label: 'Total Shots',
+                      hVal: selectedMatchForDetails.stats?.shots?.[0] ?? 0,
+                      aVal: selectedMatchForDetails.stats?.shots?.[1] ?? 0,
+                      hDisplay: String(selectedMatchForDetails.stats?.shots?.[0] ?? 0),
+                      aDisplay: String(selectedMatchForDetails.stats?.shots?.[1] ?? 0),
+                    },
+                    {
+                      label: 'Shots on Target',
+                      hVal: selectedMatchForDetails.stats?.shotsOnTarget?.[0] ?? 0,
+                      aVal: selectedMatchForDetails.stats?.shotsOnTarget?.[1] ?? 0,
+                      hDisplay: String(selectedMatchForDetails.stats?.shotsOnTarget?.[0] ?? 0),
+                      aDisplay: String(selectedMatchForDetails.stats?.shotsOnTarget?.[1] ?? 0),
+                    },
+                    {
+                      label: 'Corner Kicks',
+                      hVal: selectedMatchForDetails.stats?.corners?.[0] ?? 0,
+                      aVal: selectedMatchForDetails.stats?.corners?.[1] ?? 0,
+                      hDisplay: String(selectedMatchForDetails.stats?.corners?.[0] ?? 0),
+                      aDisplay: String(selectedMatchForDetails.stats?.corners?.[1] ?? 0),
+                    },
+                    {
+                      label: 'Fouls Committed',
+                      hVal: selectedMatchForDetails.stats?.fouls?.[0] ?? 0,
+                      aVal: selectedMatchForDetails.stats?.fouls?.[1] ?? 0,
+                      hDisplay: String(selectedMatchForDetails.stats?.fouls?.[0] ?? 0),
+                      aDisplay: String(selectedMatchForDetails.stats?.fouls?.[1] ?? 0),
+                    },
+                    {
+                      label: 'Yellow Cards',
+                      hVal: selectedMatchForDetails.stats?.yellowCards?.[0] ?? 0,
+                      aVal: selectedMatchForDetails.stats?.yellowCards?.[1] ?? 0,
+                      hDisplay: String(selectedMatchForDetails.stats?.yellowCards?.[0] ?? 0),
+                      aDisplay: String(selectedMatchForDetails.stats?.yellowCards?.[1] ?? 0),
+                    },
+                    {
+                      label: 'Red Cards',
+                      hVal: selectedMatchForDetails.stats?.redCards?.[0] ?? 0,
+                      aVal: selectedMatchForDetails.stats?.redCards?.[1] ?? 0,
+                      hDisplay: String(selectedMatchForDetails.stats?.redCards?.[0] ?? 0),
+                      aDisplay: String(selectedMatchForDetails.stats?.redCards?.[1] ?? 0),
+                    },
+                  ].map((stat, i) => {
+                    const total = stat.hVal + stat.aVal;
+                    const homePct = total > 0 ? Math.round((stat.hVal / total) * 100) : 50;
+                    const awayPct = 100 - homePct;
+                    return (
+                      <div key={i} className="space-y-1.5">
+                        <div className="flex justify-between text-xs font-bold text-slate-800 dark:text-white/90 tabular-nums">
+                          <span className="font-mono">{stat.hDisplay}</span>
+                          <span className="text-[11px] text-slate-500 dark:text-white/55 font-semibold">{stat.label}</span>
+                          <span className="font-mono">{stat.aDisplay}</span>
+                        </div>
+                        <div className="h-2 w-full rounded-full overflow-hidden flex bg-slate-200 dark:bg-white/10 gap-0.5">
+                          <div
+                            style={{ width: `${homePct}%` }}
+                            className="h-full bg-[#00E676] transition-all duration-300"
+                          />
+                          <div
+                            style={{ width: `${awayPct}%` }}
+                            className="h-full bg-sky-500 transition-all duration-300"
+                          />
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
               {matchDetailsTab === 'lineups' && (
                 <div className="space-y-3">
-                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/5 text-center text-xs text-slate-500 dark:text-white/60">
-                    Official tactical lineups are synchronized 45 minutes prior to match kickoff.
-                  </div>
+                  {selectedMatchForDetails.lineups?.home?.length > 0 ||
+                  selectedMatchForDetails.lineups?.away?.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2.5 text-xs">
+                      {/* Home Starting XI */}
+                      <div className="space-y-1.5">
+                        <div className="font-extrabold text-[11px] text-emerald-700 dark:text-[#00E676] uppercase tracking-wider px-1 truncate">
+                          {selectedMatchForDetails.homeTeam.name} XI
+                        </div>
+                        {selectedMatchForDetails.lineups.home.map((lp, idx) => (
+                          <div
+                            key={`${lp.name}_${idx}`}
+                            className="p-2 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-100 dark:border-white/5 flex items-center justify-between gap-1"
+                          >
+                            <div className="min-w-0 flex items-center gap-1.5">
+                              <span className="font-mono tabular-nums text-[10px] font-black text-slate-500 dark:text-white/50 w-5 shrink-0">
+                                #{lp.number}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="font-bold text-[11px] text-slate-900 dark:text-white truncate">
+                                  {lp.name} {lp.isCaptain ? '©' : ''}
+                                </div>
+                                <div className="text-[9px] text-slate-400 uppercase">{lp.position}</div>
+                              </div>
+                            </div>
+                            {typeof lp.rating === 'number' && lp.rating > 0 && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded font-mono tabular-nums text-[10px] font-black shrink-0 ${
+                                  lp.rating >= 7.5
+                                    ? 'bg-[#00E676] text-black'
+                                    : lp.rating >= 6.5
+                                    ? 'bg-emerald-500/20 text-emerald-700 dark:text-[#00E676]'
+                                    : 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
+                                }`}
+                              >
+                                {lp.rating.toFixed(1)}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Away Starting XI */}
+                      <div className="space-y-1.5">
+                        <div className="font-extrabold text-[11px] text-sky-600 dark:text-sky-400 uppercase tracking-wider px-1 truncate text-right">
+                          {selectedMatchForDetails.awayTeam.name} XI
+                        </div>
+                        {selectedMatchForDetails.lineups.away.map((lp, idx) => (
+                          <div
+                            key={`${lp.name}_${idx}`}
+                            className="p-2 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-100 dark:border-white/5 flex items-center justify-between gap-1"
+                          >
+                            <div className="min-w-0 flex items-center gap-1.5">
+                              <span className="font-mono tabular-nums text-[10px] font-black text-slate-500 dark:text-white/50 w-5 shrink-0">
+                                #{lp.number}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="font-bold text-[11px] text-slate-900 dark:text-white truncate">
+                                  {lp.name} {lp.isCaptain ? '©' : ''}
+                                </div>
+                                <div className="text-[9px] text-slate-400 uppercase">{lp.position}</div>
+                              </div>
+                            </div>
+                            {typeof lp.rating === 'number' && lp.rating > 0 && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded font-mono tabular-nums text-[10px] font-black shrink-0 ${
+                                  lp.rating >= 7.5
+                                    ? 'bg-[#00E676] text-black'
+                                    : lp.rating >= 6.5
+                                    ? 'bg-emerald-500/20 text-emerald-700 dark:text-[#00E676]'
+                                    : 'bg-amber-500/20 text-amber-600 dark:text-amber-400'
+                                }`}
+                              >
+                                {lp.rating.toFixed(1)}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-xl bg-slate-50 dark:bg-white/5 text-center text-xs text-slate-500 dark:text-white/60">
+                      {loadingMatchDetails
+                        ? 'Synchronizing Starting XIs from Flashscore feed...'
+                        : 'Official tactical lineups are synchronized 45 minutes prior to match kickoff.'}
+                    </div>
+                  )}
                 </div>
               )}
 

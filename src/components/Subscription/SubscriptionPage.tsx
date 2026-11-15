@@ -2,22 +2,23 @@ import React, { useState, useEffect } from 'react';
 import {
   Crown,
   Check,
-  Shield,
   CreditCard,
   Globe,
   AlertCircle,
   RefreshCw,
-  Sparkles,
   Building2,
   Lock,
   ArrowRight,
-  X,
   CheckCircle2,
   Calendar,
   Zap,
   Layers,
   Video,
   MessageSquare,
+  Mail,
+  ExternalLink,
+  ShieldCheck,
+  Receipt,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useFootball } from '../../context/FootballContext';
@@ -27,6 +28,7 @@ import {
   FREE_TIER_ALLOWANCE_SUMMARY,
   PRO_SUBSCRIPTION_PLANS,
   startPaystackSubscription,
+  verifyAndActivatePro,
   cancelProSubscription,
   getExchangeRates,
   checkPaystackKeyStatus,
@@ -43,26 +45,40 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
   onClose,
   embedded = false,
 }) => {
-  const { user, updateUser, addNotification, addFanPoints } = useFootball();
+  const { user, updateUser, addNotification } = useFootball();
 
   const [countryData, setCountryData] = useState<UserCountryData>({
     country_code: 'NG',
     country_name: 'Nigeria',
     currency: 'NGN',
   });
+  const [preferredCurrency, setPreferredCurrency] = useState<'NGN' | 'USD'>('NGN');
+  const [billingEmail, setBillingEmail] = useState<string>(user.email || 'futfieldsport@gmail.com');
   const [loadingCountry, setLoadingCountry] = useState(true);
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ NGN: 1600, USD: 1 });
-  const [paystackStatus, setPaystackStatus] = useState<{ active: boolean; message: string } | null>(null);
+  const [paystackStatus, setPaystackStatus] = useState<{
+    active: boolean;
+    message: string;
+    mode?: 'live' | 'test' | 'unconfigured';
+  } | null>(null);
   const [selectedTier, setSelectedTier] = useState<'pro' | 'vip' | 'season'>('vip');
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [showVerifyRefBox, setShowVerifyRefBox] = useState(false);
+  const [manualRef, setManualRef] = useState('');
+  const [isVerifyingManual, setIsVerifyingManual] = useState(false);
 
-  const isNigeria = countryData.country_code === 'NG';
   const isPro = Boolean(user.isPro || user.membershipTier === 'pro' || user.membershipTier === 'vip');
   const [dailyUsage, setDailyUsage] = useState(() => getDailyUsageCounts(user.id));
+
+  useEffect(() => {
+    if (user.email && user.email !== billingEmail) {
+      setBillingEmail(user.email);
+    }
+  }, [user.email]);
 
   useEffect(() => {
     const sync = () => setDailyUsage(getDailyUsageCounts(user.id));
@@ -75,12 +91,13 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
     };
   }, [user.id]);
 
-  // Detect user country and fetch live exchange rates & Paystack key status
+  // Detect user country and fetch live exchange rates & Paystack live key status
   useEffect(() => {
     let mounted = true;
     getUserCountry().then((data) => {
       if (mounted) {
         setCountryData(data);
+        setPreferredCurrency(data.country_code === 'NG' ? 'NGN' : 'USD');
         setLoadingCountry(false);
       }
     });
@@ -96,70 +113,105 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
   }, []);
 
   const formatPlanPrice = (plan: typeof PRO_SUBSCRIPTION_PLANS[0]) => {
-    const currency = countryData.currency || (isNigeria ? 'NGN' : 'USD');
-    const rate = exchangeRates[currency] || (currency === 'NGN' ? 1600 : 1);
-    const converted = plan.usdPrice * rate;
-
-    if (currency === 'NGN') {
-      return `₦${Math.round(converted).toLocaleString()}`;
-    } else if (currency === 'EUR') {
-      return `€${converted.toFixed(2)}`;
-    } else if (currency === 'GBP') {
-      return `£${converted.toFixed(2)}`;
-    } else if (currency === 'CAD') {
-      return `CA$${converted.toFixed(2)}`;
-    } else {
-      return `$${plan.usdPrice}`;
+    if (preferredCurrency === 'NGN') {
+      return plan.ngnFormatted;
     }
+    const localCur = countryData.currency || 'USD';
+    if (localCur === 'EUR') {
+      const rate = exchangeRates.EUR || 0.92;
+      return `€${(plan.usdPrice * rate).toFixed(2)}`;
+    }
+    if (localCur === 'GBP') {
+      const rate = exchangeRates.GBP || 0.78;
+      return `£${(plan.usdPrice * rate).toFixed(2)}`;
+    }
+    if (localCur === 'CAD') {
+      const rate = exchangeRates.CAD || 1.35;
+      return `CA$${(plan.usdPrice * rate).toFixed(2)}`;
+    }
+    return `$${plan.usdPrice}`;
   };
 
-  const handleSubscribe = async (planType: 'pro' | 'vip' | 'season') => {
+  const applyUnlockedUpgrade = (params: {
+    reference: string;
+    planType: 'pro' | 'vip' | 'season';
+    expiresAt: string;
+    bonusPoints?: number;
+  }) => {
+    const { reference, planType, expiresAt, bonusPoints } = params;
+    haptics.success();
+
+    confetti({
+      particleCount: 120,
+      spread: 80,
+      origin: { y: 0.6 },
+      colors: ['#00E676', '#3b82f6', '#f59e0b', '#ec4899', '#ffffff'],
+    });
+
+    const bonusFp =
+      typeof bonusPoints === 'number'
+        ? bonusPoints
+        : planType === 'season'
+        ? 5000
+        : planType === 'vip'
+        ? 2000
+        : 500;
+
+    setSuccessMessage('You are now Pro - Worldwide');
+
+    updateUser({
+      email: billingEmail.trim() || user.email,
+      isPro: true,
+      membershipTier: planType === 'vip' || planType === 'season' ? 'vip' : 'pro',
+      proPlan: planType,
+      proExpiresAt: expiresAt,
+      country: preferredCurrency === 'NGN' ? 'NG' : countryData.country_code,
+      paystackReference: reference,
+      lastPaymentCurrency: preferredCurrency,
+      fanPoints: (user.fanPoints || 0) + bonusFp,
+      weeklyPoints: (user.weeklyPoints || 0) + bonusFp,
+    });
+
+    addNotification({
+      title: 'You are now Pro - Worldwide 🏆',
+      body: `Paystack transaction confirmed (${reference}). +${bonusFp} Fan Points & unlimited access unlocked!`,
+      type: 'system',
+    });
+    addNotification({
+      title: 'Payment Receipt Sent 📬',
+      body: `Receipt dispatched to ${billingEmail.trim() || 'your email'} by Paystack.`,
+      type: 'system',
+    });
+  };
+
+  const handleSubscribe = async (
+    planType: 'pro' | 'vip' | 'season',
+    checkoutMode: 'popup' | 'redirect' = 'popup'
+  ) => {
     haptics.medium();
-    setIsProcessing(true);
+    setSelectedTier(planType);
     setErrorMessage(null);
     setSuccessMessage(null);
 
+    const cleanEmail = billingEmail.trim();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setErrorMessage('Please enter a valid email address above so Paystack can send your receipt.');
+      return;
+    }
+
+    setIsProcessing(true);
+
     await startPaystackSubscription({
-      email: user.email || 'futfieldsport@gmail.com',
+      email: cleanEmail,
       userId: user.id || 'user_guest',
-      country: countryData.country_code,
+      country: preferredCurrency === 'NGN' ? 'NG' : countryData.country_code === 'NG' ? 'US' : countryData.country_code,
+      preferredCurrency,
       planType,
-      onSuccess: ({ reference, expiresAt }) => {
+      checkoutMode,
+      onSuccess: ({ reference, planType: verifiedPlan, expiresAt, bonusPoints }) => {
         setIsProcessing(false);
-        haptics.success();
-
-        // Celebration Confetti
-        confetti({
-          particleCount: 120,
-          spread: 80,
-          origin: { y: 0.6 },
-          colors: ['#00E676', '#3b82f6', '#f59e0b', '#ec4899', '#ffffff'],
-        });
-
-        const successText = 'You are now Pro - Worldwide';
-        setSuccessMessage(successText);
-
-        updateUser({
-          isPro: true,
-          membershipTier: planType === 'vip' ? 'vip' : 'pro',
-          proPlan: planType,
-          proExpiresAt: expiresAt,
-          country: countryData.country_code,
-          paystackReference: reference,
-          fanPoints: (user.fanPoints || 0) + (planType === 'season' ? 5000 : planType === 'vip' ? 2000 : 500),
-        });
-
-        addFanPoints(planType === 'season' ? 5000 : planType === 'vip' ? 2000 : 500, 'Futfield Pro Activated');
-        addNotification({
-          title: 'You are now Pro - Worldwide 🏆',
-          body: `Paystack transaction confirmed (${reference}). Welcome to Futfield Pro!`,
-          type: 'system',
-        });
-        addNotification({
-          title: 'Payment Receipt Sent 📬',
-          body: `Please check your email for your official Paystack payment receipt, invoice, and transaction breakdown.`,
-          type: 'system',
-        });
+        const resolvedTier = (verifiedPlan || planType) as 'pro' | 'vip' | 'season';
+        applyUnlockedUpgrade({ reference, planType: resolvedTier, expiresAt, bonusPoints });
       },
       onFailed: (errText) => {
         setIsProcessing(false);
@@ -172,6 +224,35 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
     });
   };
 
+  const handleVerifyManualReference = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualRef.trim()) return;
+    setIsVerifyingManual(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    await verifyAndActivatePro(
+      manualRef.trim(),
+      selectedTier,
+      user.id || 'user_guest',
+      ({ reference, planType, expiresAt, bonusPoints }) => {
+        setIsVerifyingManual(false);
+        setShowVerifyRefBox(false);
+        setManualRef('');
+        applyUnlockedUpgrade({
+          reference,
+          planType: (planType || selectedTier) as 'pro' | 'vip' | 'season',
+          expiresAt,
+          bonusPoints,
+        });
+      },
+      (errText) => {
+        setIsVerifyingManual(false);
+        setErrorMessage(errText || 'Could not confirm this Paystack reference yet.');
+      }
+    );
+  };
+
   const handleCancelPro = async () => {
     haptics.medium();
     setIsCancelling(true);
@@ -180,16 +261,23 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
       const res = await cancelProSubscription(
         user.id,
         user.paystackSubscriptionCode,
-        user.email
+        user.email || billingEmail
       );
 
       setIsCancelling(false);
       setShowCancelModal(false);
+
+      if (!res.success) {
+        setErrorMessage(res.message || 'Could not cancel subscription right now.');
+        return;
+      }
+
       haptics.success();
 
       updateUser({
         isPro: false,
         membershipTier: 'free',
+        proPlan: undefined,
       });
 
       addNotification({
@@ -203,15 +291,13 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
     }
   };
 
-  const currentPlan = PRO_SUBSCRIPTION_PLANS.find((p) => p.id === selectedTier) || PRO_SUBSCRIPTION_PLANS[0];
-
   return (
-    <div className="space-y-6 text-slate-900 dark:text-white max-w-2xl mx-auto">
+    <div className={`space-y-5 text-slate-900 dark:text-white max-w-2xl mx-auto ${embedded ? '' : 'pb-24'}`}>
       {/* Header Banner */}
       <div className="text-center space-y-2.5 pt-1">
         <div className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-[#00E676] text-xs font-extrabold uppercase tracking-wider">
           <Crown className="w-3.5 h-3.5 fill-current" />
-          <span>Futfield Unlimited Passes</span>
+          <span>Futfield Unlimited Passes · Paystack</span>
         </div>
 
         <h1 className="font-display text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white">
@@ -222,16 +308,24 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
           Remove Free Tier caps ({FREE_TIER_ALLOWANCE_SUMMARY.limits.map(l => `${l.value} ${l.label}`).join(' · ')}) from $7.20/mo via Paystack.
         </p>
 
-        {/* Location Detection Info */}
-        <div className="inline-flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-white/70 pt-0.5">
-          <Globe className="w-3.5 h-3.5 text-emerald-700 dark:text-[#00E676]" />
-          {loadingCountry ? (
-            <span className="flex items-center gap-1 text-slate-500">
-              <RefreshCw className="w-3 h-3 animate-spin" /> Detecting location...
-            </span>
-          ) : (
-            <span className="tabular-nums">
-              Region: <strong className="text-emerald-700 dark:text-[#00E676]">{countryData.country_name} ({countryData.country_code})</strong> · Pricing in {countryData.currency || (isNigeria ? 'NGN' : 'USD')}
+        {/* Live Gateway + GeoIP Region Row */}
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5 text-[11px] font-medium text-slate-600 dark:text-white/70">
+          <span className="inline-flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5 text-emerald-700 dark:text-[#00E676]" />
+            {loadingCountry ? (
+              <span className="flex items-center gap-1 text-slate-500">
+                <RefreshCw className="w-3 h-3 animate-spin" /> Detecting region...
+              </span>
+            ) : (
+              <span className="tabular-nums">
+                Region: <strong className="text-emerald-700 dark:text-[#00E676]">{countryData.country_name} ({countryData.country_code})</strong>
+              </span>
+            )}
+          </span>
+          {paystackStatus?.active && (
+            <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-[#00E676] font-bold">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Paystack {paystackStatus.mode === 'test' ? 'Test' : 'Live'} Gateway Ready
             </span>
           )}
         </div>
@@ -246,45 +340,60 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                 Your Current Plan: {FREE_TIER_ALLOWANCE_SUMMARY.name} ($0)
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-white/60">
-                Upgrade any pass below to replace daily limits with Unlimited access
+                Upgrade any pass below to unlock Unlimited features automatically via Paystack
               </p>
             </div>
             <Zap className="w-4 h-4 text-emerald-700 dark:text-[#00E676] shrink-0" />
           </div>
 
-          <div className="grid grid-cols-3 gap-2.5 text-xs">
-            <div className="p-3 rounded-2xl bg-white dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/8 space-y-1">
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="p-2.5 rounded-2xl bg-white dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/8 space-y-1">
               <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500 dark:text-white/60">
                 <Layers className="w-3 h-3 text-emerald-700 dark:text-[#00E676]" />
                 <span>Posts</span>
               </div>
-              <div className="font-mono tabular-nums font-black text-slate-900 dark:text-white">
+              <div className="font-mono tabular-nums font-black text-slate-900 dark:text-white text-[11px]">
                 {dailyUsage.posts}/{dailyUsage.limits.post} Free
               </div>
               <div className="text-[10px] font-bold text-emerald-700 dark:text-[#00E676]">Pro: Unlimited</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-white dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/8 space-y-1">
+            <div className="p-2.5 rounded-2xl bg-white dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/8 space-y-1">
               <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500 dark:text-white/60">
                 <Video className="w-3 h-3 text-blue-500" />
                 <span>PitchReels</span>
               </div>
-              <div className="font-mono tabular-nums font-black text-slate-900 dark:text-white">
+              <div className="font-mono tabular-nums font-black text-slate-900 dark:text-white text-[11px]">
                 {dailyUsage.videos}/{dailyUsage.limits.video} Free
               </div>
               <div className="text-[10px] font-bold text-emerald-700 dark:text-[#00E676]">Pro: Unlimited</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-white dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/8 space-y-1">
+            <div className="p-2.5 rounded-2xl bg-white dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/8 space-y-1">
               <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500 dark:text-white/60">
                 <MessageSquare className="w-3 h-3 text-amber-500" />
                 <span>Room Chat</span>
               </div>
-              <div className="font-mono tabular-nums font-black text-slate-900 dark:text-white">
+              <div className="font-mono tabular-nums font-black text-slate-900 dark:text-white text-[11px]">
                 {dailyUsage.chats}/{dailyUsage.limits.chat} Free
               </div>
               <div className="text-[10px] font-bold text-emerald-700 dark:text-[#00E676]">Pro: Unlimited</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Paystack Key Configuration Notice when server key is missing */}
+      {paystackStatus && !paystackStatus.active && (
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-xs">
+          <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+          <div className="space-y-0.5">
+            <span className="font-bold text-amber-700 dark:text-amber-400 block">
+              Paystack Live Checkout Status
+            </span>
+            <span className="text-slate-600 dark:text-white/75 leading-relaxed block">
+              {paystackStatus.message}
+            </span>
           </div>
         </div>
       )}
@@ -303,6 +412,14 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
               Your account now has full verified Pro status, priority feeds, and unlimited HD streams.
             </p>
           </div>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 rounded-xl bg-[#00E676] text-black text-xs font-black shrink-0"
+            >
+              Done
+            </button>
+          )}
         </div>
       )}
 
@@ -312,7 +429,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
           <div className="flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-rose-500 mt-0.5 shrink-0" />
             <div className="text-xs">
-              <span className="font-bold text-rose-600 dark:text-rose-400 block">Payment Incomplete</span>
+              <span className="font-bold text-rose-600 dark:text-rose-400 block">Payment Notice</span>
               <span className="text-slate-600 dark:text-white/75">{errorMessage}</span>
             </div>
           </div>
@@ -325,7 +442,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
         </div>
       )}
 
-      {/* Active Pro Status Card (with Cancel Pro flow) */}
+      {/* Active Pro Status Card (with Cancel Pro flow & Receipt Reference) */}
       {isPro ? (
         <div className="p-5 rounded-3xl bg-gradient-to-br from-emerald-950/60 via-[#12171F] to-black border border-[#00E676]/60 shadow-xl space-y-4">
           <div className="flex items-center justify-between gap-2">
@@ -372,6 +489,16 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
             </div>
           </div>
 
+          {user.paystackReference && (
+            <div className="p-2.5 rounded-2xl bg-white/[0.04] border border-white/8 flex items-center justify-between text-[11px] font-mono text-white/75">
+              <span className="flex items-center gap-1.5 truncate">
+                <Receipt className="w-3.5 h-3.5 text-[#00E676] shrink-0" />
+                <span className="truncate">Ref: {user.paystackReference}</span>
+              </span>
+              <span className="text-[#00E676] font-bold shrink-0">VERIFIED</span>
+            </div>
+          )}
+
           {/* Cancel Pro Button */}
           <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2">
             <span className="text-[11px] text-white/60">
@@ -388,12 +515,60 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
       ) : (
         /* Subscription Pricing Selection Cards (3 Distinct Tiers) */
         <div className="space-y-4">
-          <div className="text-center space-y-1 mb-2">
+          {/* Billing Email + Currency Selector Card */}
+          <div className="p-4 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 space-y-3 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label
+                htmlFor="paystack-billing-email"
+                className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5"
+              >
+                <Mail className="w-3.5 h-3.5 text-emerald-700 dark:text-[#00E676]" />
+                <span>Billing &amp; Paystack Receipt Email</span>
+              </label>
+
+              {/* Currency Switcher */}
+              <div className="inline-flex p-0.5 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-[11px] font-bold self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setPreferredCurrency('NGN')}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    preferredCurrency === 'NGN'
+                      ? 'bg-[#00E676] text-black shadow-sm'
+                      : 'text-slate-600 dark:text-white/65'
+                  }`}
+                >
+                  🇳🇬 NGN (₦)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreferredCurrency('USD')}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    preferredCurrency === 'USD'
+                      ? 'bg-[#00E676] text-black shadow-sm'
+                      : 'text-slate-600 dark:text-white/65'
+                  }`}
+                >
+                  🌍 USD ($)
+                </button>
+              </div>
+            </div>
+
+            <input
+              id="paystack-billing-email"
+              type="email"
+              value={billingEmail}
+              onChange={(e) => setBillingEmail(e.target.value)}
+              placeholder="Enter email for Paystack receipt (e.g. you@gmail.com)"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-[#00E676]"
+            />
+          </div>
+
+          <div className="text-center space-y-1">
             <h3 className="font-display text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
               Choose Your Futfield Access Pass
             </h3>
             <p className="text-xs text-slate-500 dark:text-white/60">
-              Instant worldwide card processing via Paystack. Local currency auto-detected ({countryData.country_name}).
+              Instant worldwide card, bank transfer, &amp; USSD checkout via Paystack ({preferredCurrency}).
             </p>
           </div>
 
@@ -426,7 +601,9 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                       </span>
 
                       <div className="text-xs font-bold text-slate-500 dark:text-white/60 tabular-nums">
-                        USD ${plan.usdPrice} · {formatPlanPrice(plan)}
+                        {preferredCurrency === 'NGN'
+                          ? `${plan.ngnFormatted} · $${plan.usdPrice}`
+                          : `$${plan.usdPrice} USD · ${plan.ngnFormatted}`}
                       </div>
                     </div>
 
@@ -449,10 +626,12 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
 
                     <div className="flex items-baseline gap-2 pt-2 border-t border-slate-100 dark:border-white/8">
                       <span className="text-2xl font-black font-mono tabular-nums tracking-tight text-slate-900 dark:text-white">
-                        ${plan.usdPrice} USD
+                        {preferredCurrency === 'NGN' ? plan.ngnFormatted : `$${plan.usdPrice} USD`}
                       </span>
                       <span className="text-xs font-bold text-slate-500 dark:text-white/55 tabular-nums">
-                        ≈ {formatPlanPrice(plan)} {countryData.currency || 'Local'} / {plan.billingInterval}
+                        {preferredCurrency === 'NGN'
+                          ? `($${plan.usdPrice} USD) / ${plan.billingInterval}`
+                          : `≈ ${formatPlanPrice(plan)} / ${plan.billingInterval}`}
                       </span>
                     </div>
 
@@ -478,37 +657,86 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                       ))}
                     </ul>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSubscribe(plan.id);
-                      }}
-                      disabled={isProcessing}
-                      className={`w-full min-h-[46px] py-3 rounded-2xl font-black text-xs shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-95 ${
-                        plan.highlight
-                          ? 'bg-[#00E676] hover:bg-[#00c864] text-black shadow-[#00E676]/20'
-                          : 'bg-slate-900 dark:bg-white text-white dark:text-black hover:opacity-90'
-                      }`}
-                    >
-                      {isProcessing && selectedTier === plan.id ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Connecting to Paystack...</span>
-                        </>
-                      ) : (
-                        <>
-                          <CreditCard className="w-4 h-4" />
-                          <span className="tabular-nums">
-                            Pay ${plan.usdPrice} ({formatPlanPrice(plan)}) via Paystack
-                          </span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </>
-                      )}
-                    </button>
+                    <div className="space-y-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSubscribe(plan.id, 'popup');
+                        }}
+                        disabled={isProcessing}
+                        className={`w-full min-h-[46px] py-3 rounded-2xl font-black text-xs shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-95 ${
+                          plan.highlight
+                            ? 'bg-[#00E676] hover:bg-[#00c864] text-black shadow-[#00E676]/20'
+                            : 'bg-slate-900 dark:bg-white text-white dark:text-black hover:opacity-90'
+                        }`}
+                      >
+                        {isProcessing && selectedTier === plan.id ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                            <span>Opening Paystack Checkout...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CreditCard className="w-4 h-4" />
+                            <span className="tabular-nums">
+                              Pay {preferredCurrency === 'NGN' ? plan.ngnFormatted : `$${plan.usdPrice} USD`} via Paystack
+                            </span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSubscribe(plan.id, 'redirect');
+                        }}
+                        disabled={isProcessing}
+                        className="w-full py-1.5 text-[11px] font-bold text-slate-500 dark:text-white/55 hover:text-emerald-700 dark:hover:text-[#00E676] flex items-center justify-center gap-1 transition-colors"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Or continue on hosted Paystack checkout page</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
             })}
+          </div>
+
+          {/* Verify Existing Paystack Payment Reference */}
+          <div className="text-center pt-1">
+            <button
+              type="button"
+              onClick={() => setShowVerifyRefBox(prev => !prev)}
+              className="text-xs font-bold text-emerald-700 dark:text-[#00E676] hover:underline"
+            >
+              {showVerifyRefBox ? 'Hide transaction verifier' : 'Already paid via Transfer / USSD? Verify Reference'}
+            </button>
+
+            {showVerifyRefBox && (
+              <form
+                onSubmit={handleVerifyManualReference}
+                className="mt-2.5 p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 flex items-center gap-2"
+              >
+                <input
+                  type="text"
+                  value={manualRef}
+                  onChange={(e) => setManualRef(e.target.value)}
+                  placeholder="Paste Paystack reference (e.g. futfield_ng_pro_...)"
+                  className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-[#00E676]"
+                />
+                <button
+                  type="submit"
+                  disabled={isVerifyingManual || !manualRef.trim()}
+                  className="px-4 py-2 rounded-xl bg-[#00E676] text-black text-xs font-black disabled:opacity-50 shrink-0"
+                >
+                  {isVerifyingManual ? 'Checking...' : 'Verify'}
+                </button>
+              </form>
+            )}
           </div>
         </div>
       )}
@@ -522,14 +750,14 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
           </span>
         </div>
         <p className="text-[11px] text-slate-600 dark:text-white/65 max-w-sm mx-auto leading-relaxed">
-          All international cards worldwide (Visa, Mastercard, Verve, Apple Pay, Bank Transfers) accepted securely via Paystack with instant verification and automated activation.
+          All cards &amp; local methods worldwide (Visa, Mastercard, Verve, Bank Transfer, USSD, Apple Pay) accepted securely via Paystack with instant server-side verification and automated unlock.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-semibold text-slate-500 dark:text-white/50 pt-1">
           <span className="flex items-center gap-1">
             <Lock className="w-3 h-3 text-emerald-700 dark:text-[#00E676]" /> 256-bit PCI-DSS Level 1
           </span>
           <span aria-hidden="true">·</span>
-          <span>Worldwide Card Acceptance</span>
+          <span>Live Server Verification</span>
           <span aria-hidden="true">·</span>
           <span>Instant Activation</span>
         </div>

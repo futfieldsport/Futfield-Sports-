@@ -18,8 +18,10 @@ import { useFootball } from '../../context/FootballContext';
 import { useHaptics } from '../../hooks/useHaptics';
 import { CANONICAL_DOMAIN } from '../../utils/seo';
 
+import { buildShareUrl } from '../../utils/share';
+
 export const BlogPage: React.FC = () => {
-  const { activeBlogSlug, openBlogArticle, setActiveTab, goBack, addNotification } = useFootball();
+  const { activeBlogSlug, openBlogArticle, setActiveTab, goBack, addNotification, openShareSheet } = useFootball();
   const { triggerLight, triggerSuccess } = useHaptics();
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
@@ -47,23 +49,15 @@ export const BlogPage: React.FC = () => {
 
   const handleCopyArticleUrl = async (article: BlogArticle) => {
     triggerSuccess();
-    const url = `${CANONICAL_DOMAIN}/blog/${article.slug}`;
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: article.title,
-          text: article.metaDescription,
-          url,
-        });
-      } catch {}
-    } else {
-      navigator.clipboard?.writeText(url);
-    }
+    const url = buildShareUrl(`/blog/${article.slug}`);
     setCopiedSlug(article.slug);
-    addNotification({
-      title: 'Article Link Copied!',
-      body: `Ready to share: ${url}`,
-      type: 'system',
+    openShareSheet({
+      kind: 'blog',
+      targetId: article.slug,
+      title: article.title,
+      text: article.metaDescription,
+      url,
+      previewImage: article.coverImage,
     });
     setTimeout(() => setCopiedSlug(null), 2200);
   };

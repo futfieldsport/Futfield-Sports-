@@ -12,6 +12,8 @@ import {
   getSearchSuggestions as getFotmobSearch,
   getPlayerDetails as getFotmobPlayerDetails,
   getLeagueTable,
+  getLeagueDetails,
+  getAllLeagues,
 } from '@iamglitch404/fotmob';
 import {
   TOP_10_LEAGUES,
@@ -27,6 +29,10 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const IS_SERVERLESS = Boolean(
+  process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT
+);
+
 const DEFAULT_AVATAR = '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
 const DEFAULT_BANNER = '/assets/aistudio/IMG-20261102-WA2735_f2548d41.jpg';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -36,10 +42,12 @@ function isValidUuid(val: any): boolean {
 
 const portArgIndex = process.argv.indexOf('--port');
 const cliPort = portArgIndex !== -1 ? parseInt(process.argv[portArgIndex + 1], 10) : NaN;
-const PORT = !isNaN(cliPort) ? cliPort : 3000;
+const PORT = !isNaN(cliPort) ? cliPort : Number(process.env.PORT) || 3000;
 
-// Persistent Local Uploads & Store Directories
-const UPLOADS_DIR = path.resolve(__dirname, 'uploads');
+// Persistent Local Uploads & Store Directories (Netlify Functions write safely to /tmp)
+const UPLOADS_DIR = IS_SERVERLESS
+  ? '/tmp/futfield_uploads'
+  : path.resolve(__dirname, 'uploads');
 const UPLOAD_SUBDIRS = ['images', 'videos', 'thumbnails', 'avatars', 'voices'];
 for (const sub of UPLOAD_SUBDIRS) {
   fs.mkdirSync(path.join(UPLOADS_DIR, sub), { recursive: true });
@@ -50,7 +58,14 @@ const SUPPORT_TICKETS_FILE = path.join(UPLOADS_DIR, 'support-tickets.json');
 
 const app = express();
 app.use('/uploads', express.static(UPLOADS_DIR, { acceptRanges: true, maxAge: '7d' }));
-app.use(express.json({ limit: '50mb' }));
+app.use(
+  express.json({
+    limit: '50mb',
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Initialize Backend Supabase Client using environment secrets
@@ -101,7 +116,43 @@ if (geminiApiKey) {
     });
     console.log('[Backend] Gemini AI client initialized with User-Agent telemetry.');
   } catch (err) {
-    console.warn('[Backend] AI client initialization error:', err);
+    console.warn('[Backend] AI client initialization notice:', err);
+  }
+}
+
+async function invokeGeminiSafely(
+  prompt: string,
+  options?: { responseMimeType?: string; timeoutMs?: number }
+): Promise<string | null> {
+  if (!aiClient) return null;
+  const timeoutMs = options?.timeoutMs ?? 6000;
+  try {
+    const aiPromise = aiClient.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: prompt,
+      ...(options?.responseMimeType
+        ? { config: { responseMimeType: options.responseMimeType } }
+        : {}),
+    });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('AI request timeout')), timeoutMs)
+    );
+    const response = await Promise.race([aiPromise, timeoutPromise]);
+    const text = response?.text;
+    return typeof text === 'string' && text.trim() ? text.trim() : null;
+  } catch (err: any) {
+    const msg = String(err?.message || err || '');
+    if (
+      msg.includes('PERMISSION_DENIED') ||
+      msg.includes('API_KEY') ||
+      msg.toLowerCase().includes('failed to list') ||
+      msg.toLowerCase().includes('permission denied')
+    ) {
+      console.warn('[Backend] Gemini key/permission fallback active — serving local tactical engine.');
+    } else {
+      console.warn('[Backend] AI generation fallback:', msg);
+    }
+    return null;
   }
 }
 
@@ -631,6 +682,30 @@ const inMemorySupportTickets: Array<{
   updatedAt: string;
 }> = [];
 
+interface PaystackTransactionRecord {
+  reference: string;
+  userId: string;
+  email: string;
+  amount: number;
+  currency: string;
+  tier: 'pro' | 'vip' | 'season' | 'custom';
+  status: 'success' | 'failed' | 'pending';
+  createdAt: string;
+}
+
+const paystackTransactions: Record<string, PaystackTransactionRecord> = {};
+
+interface ActiveSubscription {
+  userId: string;
+  email: string;
+  tier: string;
+  expiresAt: string;
+  notified: boolean;
+}
+
+const activeSubscriptionsStore: Record<string, ActiveSubscription> = {};
+const subscriptionExpiryAlerts: Record<string, any[]> = {};
+
 // Hydrate persisted uploads & feed data on boot
 try {
   if (fs.existsSync(MEDIA_REGISTRY_FILE)) {
@@ -641,10 +716,59 @@ try {
   }
   if (fs.existsSync(FEED_STORE_FILE)) {
     const rawFeed = JSON.parse(fs.readFileSync(FEED_STORE_FILE, 'utf-8'));
-    if (Array.isArray(rawFeed?.posts)) inMemoryPosts.push(...rawFeed.posts);
-    if (Array.isArray(rawFeed?.videos)) inMemoryVideos.push(...rawFeed.videos);
+    if (Array.isArray(rawFeed?.posts)) {
+      inMemoryPosts.push(
+        ...rawFeed.posts
+          .filter((p: any) => {
+            if (!p) return false;
+            const pid = String(p.id || '').toLowerCase();
+            const handle = String(p.author?.handle || '').toLowerCase();
+            const name = String(p.author?.name || '').toLowerCase();
+            return !pid.startsWith('post_test_') && handle !== '@testfan' && name !== 'test fan';
+          })
+          .map((p: any) => ({
+            ...p,
+            author: {
+              name: p?.author?.name || 'Football Supporter',
+              handle: p?.author?.handle || '@fan',
+              avatar: p?.author?.avatar || DEFAULT_AVATAR,
+              clubBadge: p?.author?.clubBadge || p?.clubTag || '⚽',
+              isVerified: Boolean(p?.author?.isVerified),
+            },
+          }))
+      );
+    }
+    if (Array.isArray(rawFeed?.videos)) {
+      inMemoryVideos.push(
+        ...rawFeed.videos
+          .filter((v: any) => {
+            if (!v) return false;
+            const vid = String(v.id || '').toLowerCase();
+            const title = String(v.title || '').toLowerCase();
+            const url = String(v.videoUrl || '').toLowerCase();
+            return vid !== 'vid_1794743322269' && !(title === 'training highlight' && url.includes('/uploads/videos/sample.mp4'));
+          })
+          .map((v: any) => ({
+            ...v,
+            creator: {
+              name: v?.creator?.name || 'Pitch Creator',
+              handle: v?.creator?.handle || '@creator',
+              subscribers: v?.creator?.subscribers || '1 supporter',
+              avatar: v?.creator?.avatar || DEFAULT_AVATAR,
+              isVerified: Boolean(v?.creator?.isVerified),
+              isSubscribed: Boolean(v?.creator?.isSubscribed),
+            },
+          }))
+      );
+    }
     if (Array.isArray(rawFeed?.postComments)) inMemoryPostComments.push(...rawFeed.postComments);
     if (Array.isArray(rawFeed?.videoComments)) inMemoryVideoComments.push(...rawFeed.videoComments);
+    if (rawFeed?.paystackTransactions && typeof rawFeed.paystackTransactions === 'object') {
+      Object.assign(paystackTransactions, rawFeed.paystackTransactions);
+    }
+    if (rawFeed?.activeSubscriptions && typeof rawFeed.activeSubscriptions === 'object') {
+      Object.assign(activeSubscriptionsStore, rawFeed.activeSubscriptions);
+    }
   }
   if (fs.existsSync(SUPPORT_TICKETS_FILE)) {
     const rawTickets = JSON.parse(fs.readFileSync(SUPPORT_TICKETS_FILE, 'utf-8'));
@@ -670,6 +794,8 @@ function scheduleStorePersist() {
             videos: inMemoryVideos.slice(0, 200),
             postComments: inMemoryPostComments.slice(0, 500),
             videoComments: inMemoryVideoComments.slice(0, 500),
+            paystackTransactions,
+            activeSubscriptions: activeSubscriptionsStore,
           },
           null,
           2
@@ -928,7 +1054,12 @@ app.get('/api/db/posts', async (req, res) => {
     }
   }
 
-  let results = Array.from(mergedMap.values());
+  let results = Array.from(mergedMap.values()).filter(p => {
+    const pid = String(p?.id || '').toLowerCase();
+    const handle = String(p?.author?.handle || '').toLowerCase();
+    const name = String(p?.author?.name || '').toLowerCase();
+    return !pid.startsWith('post_test_') && handle !== '@testfan' && name !== 'test fan';
+  });
   if (userId) {
     results = results.filter(p => p.userId === userId || p.author?.handle === userId);
   }
@@ -951,9 +1082,17 @@ app.post('/api/db/posts', async (req, res) => {
   const newPostId = post.id || `post_${Date.now()}`;
   const dbPostId = isValidUuid(newPostId) ? newPostId : crypto.randomUUID();
   const timestamp = new Date().toISOString();
+  const prof = post.userId ? inMemoryProfiles[post.userId] : undefined;
   const fullPost = {
     ...post,
     id: newPostId,
+    author: {
+      name: post.author?.name || prof?.name || 'Football Supporter',
+      handle: post.author?.handle || prof?.handle || '@fan',
+      avatar: post.author?.avatar || prof?.avatar || DEFAULT_AVATAR,
+      clubBadge: post.author?.clubBadge || prof?.favoriteClubCrest || post.clubTag || '⚽',
+      isVerified: Boolean(post.author?.isVerified ?? prof?.isAuthenticated),
+    },
     timestamp: 'Just now',
     likes: 0,
     commentsCount: 0,
@@ -1308,7 +1447,12 @@ app.get('/api/db/videos', async (req, res) => {
     }
   }
 
-  let results = Array.from(mergedMap.values());
+  let results = Array.from(mergedMap.values()).filter(v => {
+    const vid = String(v?.id || '').toLowerCase();
+    const title = String(v?.title || '').toLowerCase();
+    const url = String(v?.videoUrl || '').toLowerCase();
+    return vid !== 'vid_1794743322269' && !(title === 'training highlight' && url.includes('/uploads/videos/sample.mp4'));
+  });
   if (search) {
     const q = (search as string).toLowerCase();
     results = results.filter(v => v.title?.toLowerCase().includes(q) || v.description?.toLowerCase().includes(q));
@@ -1386,9 +1530,18 @@ app.post('/api/db/videos', async (req, res) => {
 
   const newId = video.id || `v_${Date.now()}`;
   const dbVideoId = isValidUuid(newId) ? newId : crypto.randomUUID();
+  const creatorProf = video.userId ? inMemoryProfiles[video.userId] : undefined;
   const fullVideo = {
     ...video,
     id: newId,
+    creator: {
+      name: video.creator?.name || creatorProf?.name || 'Pitch Creator',
+      handle: video.creator?.handle || creatorProf?.handle || '@creator',
+      subscribers: video.creator?.subscribers || '1 supporter',
+      avatar: video.creator?.avatar || creatorProf?.avatar || DEFAULT_AVATAR,
+      isVerified: Boolean(video.creator?.isVerified ?? creatorProf?.isAuthenticated),
+    },
+    thumbnailUrl: video.thumbnailUrl || DEFAULT_BANNER,
     videoKind: resolvedKind,
     aspectRatio: resolvedAspectRatio,
     copyrightStatus: copyrightReport.status,
@@ -2998,19 +3151,13 @@ Output strictly valid JSON:
   "starPlayer": "Bukayo Saka"
 }`;
 
-      const aiPromise = aiClient.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' },
+      const rawAiText = await invokeGeminiSafely(prompt, {
+        responseMimeType: 'application/json',
+        timeoutMs: 4500,
       });
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('AI prediction timeout')), 3500)
-      );
 
-      const response = await Promise.race([aiPromise, timeoutPromise]);
-
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
+      if (rawAiText) {
+        const parsed = JSON.parse(rawAiText);
         const home = Number(parsed.homeWinPct) || 48;
         const away = Number(parsed.awayWinPct) || 28;
         const draw = Math.max(10, 100 - home - away);
@@ -3150,14 +3297,13 @@ Output strictly valid JSON with this schema:
   "tacticalJargonSuggestions": ["Inverted full-back", "Pressing trigger", "xG overperformance"]
 }`;
 
-      const response = await aiClient.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' },
+      const rawAiEnhance = await invokeGeminiSafely(prompt, {
+        responseMimeType: 'application/json',
+        timeoutMs: 6000,
       });
 
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
+      if (rawAiEnhance) {
+        const parsed = JSON.parse(rawAiEnhance);
         return res.json({
           success: true,
           enhancedText: parsed.enhancedText || draft,
@@ -3196,6 +3342,160 @@ Output strictly valid JSON with this schema:
     grammarNotes: ['Checked against football names and tactical terms.'],
     tacticalJargonSuggestions: ['Counter-press transition', 'Low block penetration', 'Half-space overload'],
     detectedTerminology: detectedTerminologySuggestions,
+  });
+});
+
+// -------------------------------------------------------------
+// Additional Server-Side Football AI & Phone Share Endpoints
+// -------------------------------------------------------------
+app.post('/api/ai/match-recap', async (req, res) => {
+  const { match } = req.body || {};
+  if (!match || !match.homeTeam || !match.awayTeam) {
+    return res.status(400).json({ success: false, error: 'Match details required' });
+  }
+
+  const eventsSummary = Array.isArray(match.events) && match.events.length > 0
+    ? match.events.map((e: any) => `${e.minute}' ${e.player} (${e.type})`).join(', ')
+    : 'No goals yet';
+  const possession = Array.isArray(match.stats?.possession) ? match.stats.possession : [50, 50];
+  const shots = Array.isArray(match.stats?.shots) ? match.stats.shots : [6, 5];
+
+  const prompt = `You are FUTFIELD's Senior Football Tactical Analyst. Provide a punchy, 3-paragraph recap for this match:
+Match: ${match.homeTeam.name} ${match.homeTeam.score ?? 0} - ${match.awayTeam.score ?? 0} ${match.awayTeam.name} (${match.league || 'League'})
+Status: ${match.status || 'LIVE'} (${match.minute ? match.minute + ' mins' : ''})
+Key Events: ${eventsSummary}
+Stats: Possession ${possession[0]}% vs ${possession[1]}%, Shots ${shots[0]} vs ${shots[1]}
+
+Include:
+1. Match narrative & tempo
+2. Decisive moment or tactical tweak
+3. Key player performance rating
+Keep it under 180 words with bold highlights.`;
+
+  const aiText = await invokeGeminiSafely(prompt, { timeoutMs: 5500 });
+  if (aiText) {
+    return res.json({ success: true, recap: aiText, source: 'gemini-4-hydrogen' });
+  }
+
+  const homeScore = Number(match.homeTeam.score ?? 0);
+  const awayScore = Number(match.awayTeam.score ?? 0);
+  const isDraw = homeScore === awayScore;
+  const winner = homeScore > awayScore ? match.homeTeam.name : match.awayTeam.name;
+  const keyScorer = Array.isArray(match.events)
+    ? match.events.find((e: any) => String(e?.type || '').includes('goal'))?.player
+    : null;
+
+  const fallbackRecap = `⚡ **FUTFIELD TACTICAL MATCH RECAP**
+
+${isDraw
+  ? `An enthralling tactical duel at ${match.venue || 'the stadium'}! Both ${match.homeTeam.name} and ${match.awayTeam.name} traded high-pressing spells in an intense contest.`
+  : `A commanding showcase from ${winner}! Sharp transitional counter-attacks broke the deadlock and punished spaces between the lines.`}
+
+🔥 **Decisive Turning Point:** The midfield press generated ${shots[0] + shots[1]} total shots, with ${keyScorer || 'the frontline'} leading decisive surges inside the penalty area.
+
+⭐ **Tactical Takeaway:** ${match.homeTeam.name} held ${possession[0]}% possession while ${match.awayTeam.name} threatened with rapid vertical breaks.`;
+
+  return res.json({ success: true, recap: fallbackRecap, source: 'tactical-engine' });
+});
+
+app.post('/api/ai/ask', async (req, res) => {
+  const { question, context } = req.body || {};
+  const cleanQuestion = String(question || '').trim();
+  if (!cleanQuestion) {
+    return res.status(400).json({ success: false, error: 'Question required' });
+  }
+
+  const prompt = `You are FUTFIELD AI — the world's most knowledgeable, passionate football assistant.
+User question: "${cleanQuestion}"
+${context ? `Current screen context: ${String(context)}` : ''}
+
+Rules:
+- Provide accurate football facts, tactical nuance, historical context, or stats.
+- Keep it energetic, concise (2-4 bullet points or short paragraphs).
+- Mention relevant clubs, leagues, or legendary players where fitting.`;
+
+  const aiText = await invokeGeminiSafely(prompt, { timeoutMs: 6000 });
+  if (aiText) {
+    return res.json({ success: true, answer: aiText, source: 'gemini-4-hydrogen' });
+  }
+
+  const q = cleanQuestion.toLowerCase();
+  let answer = `⚽ **FUTFIELD Football Intelligence**\n\nGreat question! In modern football, spatial dominance between the lines and transitional efficiency define winning squads. Matches are decided in half-space overloads, 3-second counter-pressing triggers, and composure in front of goal. Ask me about any club, player comparison, VAR rule, or upcoming fixture!`;
+
+  if (q.includes('el clasico') || q.includes('barca') || q.includes('madrid')) {
+    answer = `⚽ **El Clásico Tactical Breakdown**\n\n• **Midfield Control:** The duel between tempo controllers and vertical box-to-box runners dictates the rhythm.\n• **Flank Threat:** 1v1 wingers consistently draw double-teams, creating half-spaces for overlapping fullbacks.\n• **Rivalry Stakes:** Every meeting reshapes the title race and global football conversation.`;
+  } else if (q.includes('offside') || q.includes('var')) {
+    answer = `📐 **Offside & Semi-Automated VAR Rules**\n\n• A player is in an offside position if any scoring part of their head, body, or feet is nearer the opponent's goal line than both the ball and the second-last opponent.\n• Hands and arms are excluded.\n• Semi-Automated Offside Technology tracks limb points rapidly to keep match decisions accurate.`;
+  } else if (q.includes('haaland') || q.includes('saka') || q.includes('yamal') || q.includes('bellingham')) {
+    answer = `🌟 **Player Scouting Report**\n\n• **Finishing & Movement:** Elite box occupation and blind-side runs generate high xG per 90.\n• **Pressing Work Rate:** Executes counter-pressing triggers immediately after possession turnovers.\n• **Match Impact:** Consistently creates goal contributions against deep-block defenses.`;
+  }
+
+  return res.json({ success: true, answer, source: 'tactical-engine' });
+});
+
+app.post('/api/ai/translate', async (req, res) => {
+  const { text, targetLanguage = 'English' } = req.body || {};
+  const cleanText = String(text || '');
+  if (!cleanText.trim()) {
+    return res.json({ success: true, translatedText: cleanText });
+  }
+
+  const prompt = `Translate the following football fan post accurately into ${String(targetLanguage)}, preserving football slang and matchday energy. Return ONLY the translated text without quotes:\n\n${cleanText}`;
+  const aiText = await invokeGeminiSafely(prompt, { timeoutMs: 4500 });
+  return res.json({
+    success: true,
+    translatedText: aiText || cleanText,
+    source: aiText ? 'gemini-4-hydrogen' : 'passthrough',
+  });
+});
+
+const shareAnalyticsLog: Array<{ channel: string; targetType: string; targetId?: string; timestamp: string }> = [];
+
+app.post('/api/share/track', (req, res) => {
+  const { channel = 'copy', targetType = 'app', targetId } = req.body || {};
+  shareAnalyticsLog.unshift({
+    channel: String(channel),
+    targetType: String(targetType),
+    targetId: targetId ? String(targetId) : undefined,
+    timestamp: new Date().toISOString(),
+  });
+  if (shareAnalyticsLog.length > 500) shareAnalyticsLog.pop();
+
+  let updatedShares: number | undefined;
+  if (targetType === 'post' && targetId) {
+    const post = inMemoryPosts.find(p => p.id === targetId);
+    if (post) {
+      post.shares = (post.shares || 0) + 1;
+      updatedShares = post.shares;
+      scheduleStorePersist();
+      broadcastToGlobalFeed('post_engagement_updated', { postId: targetId, shares: updatedShares });
+      broadcastToGlobalFeed('analytics_summary', computeRealtimeAnalytics());
+    }
+  } else if (targetType === 'video' && targetId) {
+    const video = inMemoryVideos.find(v => v.id === targetId);
+    if (video) {
+      video.shares = (video.shares || 0) + 1;
+      updatedShares = video.shares;
+      scheduleStorePersist();
+      broadcastToGlobalFeed('video_engagement_updated', {
+        videoId: targetId,
+        views: video.views || 0,
+        likes: video.likes || 0,
+        shares: updatedShares,
+        reactions: video.reactions || {},
+        commentsCount: video.commentsCount || 0,
+      });
+      broadcastToGlobalFeed('analytics_summary', computeRealtimeAnalytics());
+    }
+  }
+
+  return res.json({
+    success: true,
+    channel,
+    targetType,
+    targetId: targetId || null,
+    shares: updatedShares,
+    totalTrackedShares: shareAnalyticsLog.length,
   });
 });
 
@@ -3428,14 +3728,13 @@ Provide strategic, authentic football monetization recommendations strictly as a
   "topRecommendedTags": ["#ChampionsLeague", "#Tactics", "#FUTFIELD", "#DerbyDay"]
 }`;
 
-      const response = await aiClient.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: { responseMimeType: 'application/json' },
+      const rawAdviceText = await invokeGeminiSafely(prompt, {
+        responseMimeType: 'application/json',
+        timeoutMs: 5500,
       });
 
-      if (response.text) {
-        const parsed = JSON.parse(response.text);
+      if (rawAdviceText) {
+        const parsed = JSON.parse(rawAdviceText);
         return res.json({ success: true, advice: parsed });
       }
     } catch (err: any) {
@@ -3481,65 +3780,190 @@ Provide strategic, authentic football monetization recommendations strictly as a
 // Paystack Official Payment & Membership Billing Engine
 // -------------------------------------------------------------
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || '';
-const PAYSTACK_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || 'pk_test_futfield_live_football_engine';
+const PAYSTACK_PUBLIC_KEY =
+  process.env.VITE_PAYSTACK_PUBLIC_KEY || process.env.PAYSTACK_PUBLIC_KEY || '';
 
-interface PaystackTransactionRecord {
+if (!IS_SERVERLESS) {
+  setInterval(() => {
+    const now = new Date();
+    for (const [userId, sub] of Object.entries(activeSubscriptionsStore)) {
+      if (!sub.notified && new Date(sub.expiresAt) < now) {
+        sub.notified = true;
+        if (!subscriptionExpiryAlerts[userId]) {
+          subscriptionExpiryAlerts[userId] = [];
+        }
+        subscriptionExpiryAlerts[userId].unshift({
+          id: `expiry_${Date.now()}`,
+          title: 'Subscription Expired',
+          body: `Your FUTFIELD ${sub.tier.toUpperCase()} subscription pass has expired. Renew with Paystack to restore Pro access.`,
+          type: 'subscription_expired',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
+  }, 60_000);
+}
+
+function getTierPricingSpec(tierRaw: string) {
+  const tier = (tierRaw || 'pro').toLowerCase();
+  if (tier === 'season') {
+    return { tier: 'season' as const, usdPrice: 36, usdSubunit: 3600, ngnPrice: 57600, ngnSubunit: 5760000, days: 150, bonusFp: 5000 };
+  }
+  if (tier === 'vip') {
+    return { tier: 'vip' as const, usdPrice: 25, usdSubunit: 2500, ngnPrice: 40000, ngnSubunit: 4000000, days: 90, bonusFp: 2000 };
+  }
+  return { tier: 'pro' as const, usdPrice: 12, usdSubunit: 1200, ngnPrice: 19200, ngnSubunit: 1920000, days: 30, bonusFp: 500 };
+}
+
+async function activateProMembershipForUser(params: {
   reference: string;
   userId: string;
-  email: string;
-  amount: number;
-  currency: string;
-  tier: 'pro' | 'vip' | 'custom';
-  status: 'success' | 'failed' | 'pending';
-  createdAt: string;
-}
+  email?: string;
+  planType: string;
+  amountMajor?: number;
+  currency?: string;
+}) {
+  const { reference, userId, email = 'supporter@futfieldsport.com.ng', planType, amountMajor, currency = 'NGN' } = params;
+  const spec = getTierPricingSpec(planType);
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + spec.days);
+  const expiresAtIso = expiresAt.toISOString();
 
-const paystackTransactions: Record<string, PaystackTransactionRecord> = {};
+  if (paystackTransactions[reference]) {
+    paystackTransactions[reference].status = 'success';
+  } else {
+    paystackTransactions[reference] = {
+      reference,
+      userId,
+      email,
+      amount: amountMajor ?? (currency === 'NGN' ? spec.ngnPrice : spec.usdPrice),
+      currency,
+      tier: spec.tier,
+      status: 'success',
+      createdAt: new Date().toISOString(),
+    };
+  }
 
-interface ActiveSubscription {
-  userId: string;
-  email: string;
-  tier: string;
-  expiresAt: string;
-  notified: boolean;
-}
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (userId) {
+    const subRecord: ActiveSubscription = {
+      userId,
+      email: cleanEmail,
+      tier: spec.tier,
+      expiresAt: expiresAtIso,
+      notified: false,
+    };
+    activeSubscriptionsStore[userId] = subRecord;
+    if (cleanEmail) {
+      activeSubscriptionsStore[`email:${cleanEmail}`] = subRecord;
+    }
 
-const activeSubscriptionsStore: Record<string, ActiveSubscription> = {};
-const subscriptionExpiryAlerts: Record<string, any[]> = {};
+    if (inMemoryProfiles[userId]) {
+      inMemoryProfiles[userId] = {
+        ...inMemoryProfiles[userId],
+        isPro: true,
+        membershipTier: spec.tier === 'vip' || spec.tier === 'season' ? 'vip' : 'pro',
+        proPlan: spec.tier,
+        proExpiresAt: expiresAtIso,
+        paystackReference: reference,
+        fanPoints: (inMemoryProfiles[userId].fanPoints || 0) + spec.bonusFp,
+      };
+    }
 
-setInterval(() => {
-  const now = new Date();
-  for (const [userId, sub] of Object.entries(activeSubscriptionsStore)) {
-    if (!sub.notified && new Date(sub.expiresAt) < now) {
-      sub.notified = true;
-      if (!subscriptionExpiryAlerts[userId]) {
-        subscriptionExpiryAlerts[userId] = [];
-      }
-      subscriptionExpiryAlerts[userId].unshift({
-        id: `expiry_${Date.now()}`,
-        title: 'Subscription Expired',
-        body: `Your FUTFIELD ${sub.tier.toUpperCase()} subscription pass has expired. Renew with Paystack to restore Pro access.`,
-        type: 'subscription_expired',
+    const wallet = getOrCreateWallet(userId);
+    wallet.subscriptions += spec.usdPrice;
+    if (!wallet.transactions.some((tx: any) => tx.id === `tx_${reference}`)) {
+      wallet.transactions.unshift({
+        id: `tx_${reference}`,
+        type: 'subscription',
+        amount: amountMajor ?? spec.usdPrice,
+        description: `FUTFIELD ${spec.tier.toUpperCase()} Subscription Unlocked (${currency})`,
+        status: 'COMPLETED',
         timestamp: new Date().toISOString(),
       });
     }
-  }
-}, 60_000);
 
-app.get('/api/subscriptions/check/:userId', (req, res) => {
+    if (supabaseBackendClient && isValidUuid(userId)) {
+      try {
+        await supabaseBackendClient
+          .from('profiles')
+          .update({
+            is_pro: true,
+            pro_plan: spec.tier,
+            pro_expires_at: expiresAtIso,
+          })
+          .eq('id', userId);
+      } catch (supaErr) {
+        console.warn('[Paystack] Supabase profile unlock sync notice:', supaErr);
+      }
+    }
+  } else if (cleanEmail) {
+    activeSubscriptionsStore[`email:${cleanEmail}`] = {
+      userId: `email:${cleanEmail}`,
+      email: cleanEmail,
+      tier: spec.tier,
+      expiresAt: expiresAtIso,
+      notified: false,
+    };
+  }
+
+  scheduleStorePersist();
+  broadcastToGlobalFeed('subscription_unlocked', {
+    userId,
+    email: cleanEmail,
+    tier: spec.tier,
+    isPro: true,
+    membershipTier: spec.tier === 'vip' || spec.tier === 'season' ? 'vip' : 'pro',
+    expiresAt: expiresAtIso,
+    bonusPoints: spec.bonusFp,
+    reference,
+  });
+
+  return { spec, expiresAtIso };
+}
+
+app.get('/api/subscriptions/check/:userId', async (req, res) => {
   const { userId } = req.params;
-  const sub = activeSubscriptionsStore[userId];
+  const emailParam = String(req.query.email || '').trim().toLowerCase();
+  let sub =
+    activeSubscriptionsStore[userId] ||
+    (emailParam ? activeSubscriptionsStore[`email:${emailParam}`] : undefined);
+
+  if (!sub && supabaseBackendClient && isValidUuid(userId)) {
+    try {
+      const { data: prof } = await supabaseBackendClient
+        .from('profiles')
+        .select('is_pro, pro_plan, pro_expires_at')
+        .eq('id', userId)
+        .maybeSingle();
+      if (prof?.is_pro) {
+        sub = {
+          userId,
+          email: emailParam,
+          tier: prof.pro_plan || 'pro',
+          expiresAt: prof.pro_expires_at || new Date(Date.now() + 30 * 86400000).toISOString(),
+          notified: false,
+        };
+        activeSubscriptionsStore[userId] = sub;
+      }
+    } catch {}
+  }
+
   const isExpired = sub ? new Date(sub.expiresAt) < new Date() : false;
   const alerts = subscriptionExpiryAlerts[userId] || [];
   if (alerts.length > 0) {
     subscriptionExpiryAlerts[userId] = [];
   }
+  const latestTx = Object.values(paystackTransactions).find(
+    (tx) => tx.status === 'success' && (tx.userId === userId || (emailParam && tx.email?.toLowerCase() === emailParam))
+  );
   res.json({
     success: true,
     hasSubscription: Boolean(sub),
     isPro: sub ? !isExpired : false,
     tier: sub?.tier || 'free',
     expiresAt: sub?.expiresAt || null,
+    reference: latestTx?.reference || null,
     isExpired,
     alerts,
   });
@@ -3550,8 +3974,7 @@ app.get('/api/ip-country', async (req, res) => {
     const forwarded = req.headers['x-forwarded-for'];
     const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket.remoteAddress || '';
     const ipQuery = ip && ip !== '127.0.0.1' && ip !== '::1' ? ip : '';
-    
-    // Try ipapi.co
+
     try {
       const apiRes = await fetch(`https://ipapi.co/${ipQuery ? ipQuery + '/' : ''}json/`, {
         headers: { Accept: 'application/json' },
@@ -3571,7 +3994,6 @@ app.get('/api/ip-country', async (req, res) => {
       }
     } catch {}
 
-    // Fallback to ipwho.is (free IP location & currency provider)
     try {
       const whoRes = await fetch(`https://ipwho.is/${ipQuery}`, {
         headers: { Accept: 'application/json' },
@@ -3592,7 +4014,6 @@ app.get('/api/ip-country', async (req, res) => {
     } catch {}
   } catch {}
 
-  // Fallback default
   return res.json({
     success: true,
     country_code: 'NG',
@@ -3601,13 +4022,22 @@ app.get('/api/ip-country', async (req, res) => {
   });
 });
 
-// Paystack Key Status Check
+// Paystack Key Status Check (Real validation only)
 app.get('/api/paystack/status', async (req, res) => {
+  const keyMode = PAYSTACK_SECRET_KEY.startsWith('sk_live_') || PAYSTACK_PUBLIC_KEY.startsWith('pk_live_')
+    ? 'live'
+    : PAYSTACK_SECRET_KEY
+    ? 'test'
+    : 'unconfigured';
+
   if (!PAYSTACK_SECRET_KEY) {
     return res.json({
       active: false,
       configured: false,
-      message: 'Paystack Secret Key not found in environment secrets.',
+      mode: 'unconfigured',
+      hasPublicKey: Boolean(PAYSTACK_PUBLIC_KEY),
+      publicKey: PAYSTACK_PUBLIC_KEY || undefined,
+      message: 'PAYSTACK_SECRET_KEY is not configured in environment variables.',
     });
   }
 
@@ -3621,20 +4051,26 @@ app.get('/api/paystack/status', async (req, res) => {
       return res.json({
         active: true,
         configured: true,
-        message: 'Paystack live keys are active and successfully connected to gateway.',
-      });
-    } else {
-      return res.json({
-        active: false,
-        configured: true,
-        message: testData.message || 'Paystack secret key authentication failed.',
+        mode: keyMode,
+        hasPublicKey: Boolean(PAYSTACK_PUBLIC_KEY),
+        publicKey: PAYSTACK_PUBLIC_KEY || undefined,
+        message: 'Paystack gateway authenticated and connected.',
       });
     }
-  } catch {
     return res.json({
-      active: true,
+      active: false,
       configured: true,
-      message: 'Paystack keys are active and connected to gateway.',
+      mode: keyMode,
+      hasPublicKey: Boolean(PAYSTACK_PUBLIC_KEY),
+      message: testData?.message || 'Paystack secret key authentication failed.',
+    });
+  } catch (err: any) {
+    return res.json({
+      active: false,
+      configured: true,
+      mode: keyMode,
+      hasPublicKey: Boolean(PAYSTACK_PUBLIC_KEY),
+      message: err?.message || 'Unable to reach Paystack API right now.',
     });
   }
 });
@@ -3678,40 +4114,33 @@ app.post('/api/paystack/initialize', async (req, res) => {
     email,
     user_id = 'user_guest',
     country = 'NG',
+    preferred_currency,
     plan_type = 'pro',
     callback_url,
     metadata = {},
-  } = req.body;
+  } = req.body || {};
 
   if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
+    return res.status(400).json({ success: false, error: 'Email is required to start Paystack checkout.' });
   }
 
-  const isNigeria = country?.toUpperCase() === 'NG';
-  const tier = plan_type?.toLowerCase() || 'pro';
-
-  // 3 Tiers Pricing Matrix ($12, $25, $36):
-  // pro: $12 (1200 cents or ₦19,200 = 1,920,000 kobo)
-  // vip: $25 (2500 cents or ₦40,000 = 4,000,000 kobo)
-  // season: $36 (3600 cents or ₦57,600 = 5,760,000 kobo)
-  let subunitAmount: number;
-  let currency: 'NGN' | 'USD';
-
-  if (isNigeria) {
-    if (tier === 'season') subunitAmount = 5760000; // ₦57,600
-    else if (tier === 'vip') subunitAmount = 4000000; // ₦40,000
-    else subunitAmount = 1920000; // ₦19,200
-    currency = 'NGN';
-  } else {
-    if (tier === 'season') subunitAmount = 3600; // $36.00 -> 3600 cents
-    else if (tier === 'vip') subunitAmount = 2500; // $25.00 -> 2500 cents
-    else subunitAmount = 1200; // $12.00 -> 1200 cents
-    currency = 'USD';
+  if (!PAYSTACK_SECRET_KEY) {
+    return res.status(503).json({
+      success: false,
+      error: 'Paystack live secret key (PAYSTACK_SECRET_KEY) is not configured in environment secrets.',
+    });
   }
 
-  const reference = `futfield_${isNigeria ? 'ng' : 'global'}_${tier}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const finalCallbackUrl =
-    callback_url || `${process.env.APP_URL || 'https://fitfield.com'}/payment/callback`;
+  const useNgn =
+    preferred_currency === 'NGN' ||
+    (preferred_currency !== 'USD' && country?.toUpperCase() === 'NG');
+  const spec = getTierPricingSpec(plan_type);
+  let subunitAmount = useNgn ? spec.ngnSubunit : spec.usdSubunit;
+  let currency: 'NGN' | 'USD' = useNgn ? 'NGN' : 'USD';
+
+  const reference = `futfield_${useNgn ? 'ng' : 'global'}_${spec.tier}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const origin = (req.headers.origin as string) || process.env.APP_URL || 'https://futfieldsport.com.ng';
+  const finalCallbackUrl = callback_url || `${origin.replace(/\/$/, '')}/payment/callback`;
 
   paystackTransactions[reference] = {
     reference,
@@ -3719,14 +4148,41 @@ app.post('/api/paystack/initialize', async (req, res) => {
     email,
     amount: subunitAmount / 100,
     currency,
-    tier: tier as any,
+    tier: spec.tier,
     status: 'pending',
     createdAt: new Date().toISOString(),
   };
+  scheduleStorePersist();
 
-  if (PAYSTACK_SECRET_KEY) {
-    try {
-      let paystackResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+  try {
+    let paystackResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email,
+        amount: subunitAmount,
+        currency,
+        reference,
+        callback_url: finalCallbackUrl,
+        metadata: {
+          ...metadata,
+          user_id,
+          plan_type: spec.tier,
+          country,
+          settlement: 'Paystack Worldwide Gateway',
+          app: 'Futfield',
+        },
+      }),
+    });
+
+    let data = await paystackResponse.json();
+
+    // Retry in NGN equivalent if merchant Paystack profile restricts USD currency
+    if (!data?.status && currency === 'USD') {
+      const retryRes = await fetch('https://api.paystack.co/transaction/initialize', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
@@ -3734,168 +4190,121 @@ app.post('/api/paystack/initialize', async (req, res) => {
         },
         body: JSON.stringify({
           email,
-          amount: subunitAmount,
-          currency,
+          amount: spec.ngnSubunit,
+          currency: 'NGN',
           reference,
           callback_url: finalCallbackUrl,
           metadata: {
             ...metadata,
             user_id,
-            plan_type: tier,
+            plan_type: spec.tier,
             country,
-            settlement: 'Paystack Worldwide Gateway',
+            fallback_converted: true,
             app: 'Futfield',
           },
         }),
       });
-
-      let data = await paystackResponse.json();
-
-      // Fallback: If USD is disabled on merchant account, convert to NGN equivalent
-      if (!data?.status && currency === 'USD') {
-        const fallbackKobo = tier === 'season' ? 20000000 : tier === 'vip' ? 8000000 : 1600000;
-        const retryRes = await fetch('https://api.paystack.co/transaction/initialize', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            email,
-            amount: fallbackKobo,
-            currency: 'NGN',
-            reference,
-            callback_url: finalCallbackUrl,
-            metadata: {
-              ...metadata,
-              user_id,
-              plan_type: tier,
-              country,
-              fallback_converted: true,
-              app: 'Futfield',
-            },
-          }),
-        });
-        data = await retryRes.json();
-        if (data?.status) {
-          subunitAmount = fallbackKobo;
-          currency = 'NGN';
-        }
+      data = await retryRes.json();
+      if (data?.status) {
+        subunitAmount = spec.ngnSubunit;
+        currency = 'NGN';
+        paystackTransactions[reference].amount = subunitAmount / 100;
+        paystackTransactions[reference].currency = currency;
       }
-
-      if (data?.status && data.data) {
-        return res.json({
-          success: true,
-          reference: data.data.reference || reference,
-          authorization_url: data.data.authorization_url,
-          access_code: data.data.access_code,
-          publicKey: PAYSTACK_PUBLIC_KEY,
-          amount: subunitAmount,
-          currency,
-          plan_type: tier,
-        });
-      }
-    } catch (err: any) {
-      console.warn('[Paystack Initialize Warning]:', err?.message);
     }
-  }
 
-  // Resilient fallback
-  return res.json({
-    success: true,
-    reference,
-    authorization_url: `https://checkout.paystack.com/${reference}`,
-    access_code: `acc_${reference}`,
-    publicKey: PAYSTACK_PUBLIC_KEY,
-    amount: subunitAmount,
-    currency,
-    plan_type: tier,
-  });
+    if (data?.status && data.data?.authorization_url) {
+      return res.json({
+        success: true,
+        reference: data.data.reference || reference,
+        authorization_url: data.data.authorization_url,
+        access_code: data.data.access_code,
+        publicKey: PAYSTACK_PUBLIC_KEY || undefined,
+        amount: subunitAmount,
+        currency,
+        plan_type: spec.tier,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: data?.message || 'Paystack rejected checkout initialization. Verify merchant key & currency.',
+    });
+  } catch (err: any) {
+    console.error('[Paystack Initialize Error]:', err?.message);
+    return res.status(502).json({
+      success: false,
+      error: err?.message || 'Unable to connect to Paystack initialization endpoint.',
+    });
+  }
 });
 
 async function handlePaystackVerify(req: express.Request, res: express.Response) {
-  const reference = (req.params.reference || req.body?.reference || req.query?.reference) as string;
-  const userId = (req.body?.user_id || req.body?.userId || req.query?.user_id || 'user_guest') as string;
-  const planType = (req.body?.plan_type || req.query?.plan_type || 'pro') as string;
+  const reference = String(req.params.reference || req.body?.reference || req.query?.reference || '').trim();
+  const reqUserId = String(req.body?.user_id || req.body?.userId || req.query?.user_id || '').trim();
+  const reqPlanType = String(req.body?.plan_type || req.query?.plan_type || '').trim();
 
   if (!reference) {
-    return res.status(400).json({ error: 'Transaction reference is required' });
+    return res.status(400).json({ success: false, error: 'Transaction reference is required' });
   }
 
-  let verified = true;
+  if (!PAYSTACK_SECRET_KEY) {
+    return res.status(503).json({
+      success: false,
+      error: 'Paystack verification secret key is not configured on the server.',
+      reference,
+    });
+  }
+
+  let verified = false;
   let transactionData: any = null;
+  let verifyMessage = 'Transaction verification failed or was not paid.';
 
-  if (PAYSTACK_SECRET_KEY && !reference.startsWith('demo_')) {
-    try {
-      const response = await fetch(
-        `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-          },
-        }
-      );
-      const data = await response.json();
-      if (data.status && data.data?.status === 'success') {
-        verified = true;
-        transactionData = data.data;
-      } else {
-        verified = false;
+  try {
+    const response = await fetch(
+      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        },
+        signal: AbortSignal.timeout(8000),
       }
-    } catch (err: any) {
-      console.warn('[Paystack Verify Warning]:', err?.message);
+    );
+    const data = await response.json();
+    if (data?.status && data.data?.status === 'success') {
+      verified = true;
+      transactionData = data.data;
+    } else {
+      verifyMessage = data?.data?.gateway_response || data?.message || verifyMessage;
     }
+  } catch (err: any) {
+    verifyMessage = err?.message || 'Unable to reach Paystack verification server.';
   }
 
-  if (!verified) {
+  if (!verified || !transactionData) {
     return res.status(400).json({
       success: false,
-      error: 'Transaction verification failed or was declined by issuing bank.',
+      error: verifyMessage,
       reference,
     });
   }
 
-  const tierLower = planType.toLowerCase();
-  const daysToAdd = tierLower === 'season' ? 150 : tierLower === 'vip' ? 90 : 30;
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + daysToAdd);
-  const expiresAtIso = expiresAt.toISOString();
+  const meta = transactionData.metadata || {};
+  const existingTx = paystackTransactions[reference];
+  const resolvedUserId = reqUserId || String(meta.user_id || existingTx?.userId || 'user_guest');
+  const resolvedPlan = String(reqPlanType || meta.plan_type || existingTx?.tier || 'pro').toLowerCase();
+  const resolvedEmail = transactionData.customer?.email || existingTx?.email || 'supporter@futfieldsport.com.ng';
+  const amountMajor = Number(transactionData.amount || 0) / 100;
+  const currency = transactionData.currency || 'NGN';
 
-  if (paystackTransactions[reference]) {
-    paystackTransactions[reference].status = 'success';
-  } else {
-    paystackTransactions[reference] = {
-      reference,
-      userId,
-      email: transactionData?.customer?.email || 'supporter@futfield.com',
-      amount: transactionData ? transactionData.amount / 100 : planType === 'season' ? 49.99 : planType === 'vip' ? 14.99 : 4.99,
-      currency: transactionData?.currency || 'USD',
-      tier: planType as any,
-      status: 'success',
-      createdAt: new Date().toISOString(),
-    };
-  }
-
-  if (userId) {
-    activeSubscriptionsStore[userId] = {
-      userId,
-      email: transactionData?.customer?.email || 'supporter@futfield.com',
-      tier: planType,
-      expiresAt: expiresAtIso,
-      notified: false,
-    };
-
-    const wallet = getOrCreateWallet(userId);
-    wallet.subscriptions += planType === 'season' ? 25.0 : planType === 'vip' ? 10.0 : 3.0;
-    wallet.transactions.unshift({
-      id: `tx_${reference}`,
-      type: 'subscription',
-      amount: planType === 'season' ? 49.99 : planType === 'vip' ? 14.99 : 4.99,
-      description: `FUTFIELD ${planType.toUpperCase()} Subscription Activated`,
-      status: 'COMPLETED',
-      timestamp: 'Just now',
-    });
-  }
+  const { spec, expiresAtIso } = await activateProMembershipForUser({
+    reference,
+    userId: resolvedUserId,
+    email: resolvedEmail,
+    planType: resolvedPlan,
+    amountMajor,
+    currency,
+  });
 
   return res.json({
     success: true,
@@ -3903,25 +4312,32 @@ async function handlePaystackVerify(req: express.Request, res: express.Response)
     message: 'You are now Pro - Worldwide',
     data: {
       is_pro: true,
-      plan_type: planType,
+      plan_type: spec.tier,
       expires_at: expiresAtIso,
-      currency: transactionData?.currency || (reference.includes('_ng_') ? 'NGN' : 'USD'),
+      currency,
+      amount: amountMajor,
+      bonus_points: spec.bonusFp,
       reference,
     },
   });
 }
 
 app.get('/api/paystack/verify/:reference', handlePaystackVerify);
+app.post('/api/paystack/verify/:reference', handlePaystackVerify);
 app.post('/api/paystack/verify', handlePaystackVerify);
 
-app.post('/api/paystack/webhook', (req, res) => {
+app.post('/api/paystack/webhook', async (req: any, res) => {
   const signature = req.headers['x-paystack-signature'] as string;
 
-  if (PAYSTACK_SECRET_KEY && signature) {
+  if (PAYSTACK_SECRET_KEY) {
+    if (!signature) {
+      return res.status(401).json({ error: 'Missing Paystack webhook signature.' });
+    }
     try {
+      const payloadForHmac = req.rawBody ? req.rawBody : JSON.stringify(req.body);
       const hash = crypto
         .createHmac('sha512', PAYSTACK_SECRET_KEY)
-        .update(JSON.stringify(req.body))
+        .update(payloadForHmac)
         .digest('hex');
 
       if (hash !== signature) {
@@ -3929,17 +4345,32 @@ app.post('/api/paystack/webhook', (req, res) => {
         return res.status(401).send('Unauthorized webhook signature');
       }
     } catch (cryptoErr) {
-      console.warn('[Paystack Webhook] Signature verification notice:', cryptoErr);
+      console.warn('[Paystack Webhook] Signature verification error:', cryptoErr);
+      return res.status(401).send('Invalid signature');
     }
   }
 
   const { event, data } = req.body || {};
   console.log(`[Paystack Webhook] Event: ${event}`);
 
-  if (event === 'charge.success') {
-    const reference = data?.reference;
-    if (reference && paystackTransactions[reference]) {
-      paystackTransactions[reference].status = 'success';
+  if (event === 'charge.success' && data?.reference) {
+    const reference = String(data.reference);
+    const meta = data.metadata || {};
+    const existingTx = paystackTransactions[reference];
+    const resolvedUserId = String(meta.user_id || existingTx?.userId || '').trim();
+    const resolvedPlan = String(meta.plan_type || existingTx?.tier || 'pro').toLowerCase();
+
+    if (resolvedUserId) {
+      await activateProMembershipForUser({
+        reference,
+        userId: resolvedUserId,
+        email: data.customer?.email || existingTx?.email,
+        planType: resolvedPlan,
+        amountMajor: Number(data.amount || 0) / 100,
+        currency: data.currency || 'NGN',
+      });
+    } else if (existingTx) {
+      existingTx.status = 'success';
     }
   }
 
@@ -3947,12 +4378,11 @@ app.post('/api/paystack/webhook', (req, res) => {
 });
 
 app.post('/api/paystack/cancel-subscription', async (req, res) => {
-  const { user_id, subscription_code, email } = req.body || {};
+  const { user_id, subscription_code } = req.body || {};
 
-  let success = true;
   if (PAYSTACK_SECRET_KEY && subscription_code) {
     try {
-      const response = await fetch('https://api.paystack.co/subscription/disable', {
+      await fetch('https://api.paystack.co/subscription/disable', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
@@ -3963,11 +4393,18 @@ app.post('/api/paystack/cancel-subscription', async (req, res) => {
           token: subscription_code,
         }),
       });
-      const data = await response.json();
-      success = Boolean(data.status);
     } catch (err: any) {
       console.warn('[Paystack Cancel Warning]:', err?.message);
     }
+  }
+
+  if (user_id && activeSubscriptionsStore[user_id]) {
+    delete activeSubscriptionsStore[user_id];
+  }
+  if (supabaseBackendClient && isValidUuid(user_id)) {
+    try {
+      await supabaseBackendClient.from('profiles').update({ is_pro: false }).eq('id', user_id);
+    } catch {}
   }
 
   return res.json({
@@ -3977,13 +4414,17 @@ app.post('/api/paystack/cancel-subscription', async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// Live Football Match Engine (Fast Timeout-Protected Multi-Date Cache)
+// Live Football Match Engine (Flashscore-Grade Match Details + Multi-Date Cache)
 // -------------------------------------------------------------
 let cachedMatchesResponse: any = null;
 const matchesCacheByDate = new Map<string, { timestamp: number; data: any }>();
-const MATCH_CACHE_TTL_MS = 30_000; // 30 seconds fresh cache
+const MATCH_CACHE_TTL_MS = 30_000;
+const matchDetailsCache = new Map<string, { timestamp: number; finished: boolean; data: any }>();
+const MATCH_DETAIL_LIVE_TTL_MS = 25_000;
+const MATCH_DETAIL_FINISHED_TTL_MS = 10 * 60_000;
 const leagueTableCache = new Map<string, { timestamp: number; data: any }>();
-const LEAGUE_TABLE_TTL_MS = 5 * 60_000; // 5 minutes cache
+const LEAGUE_TABLE_TTL_MS = 5 * 60_000;
+const livePlayersCache = { timestamp: 0, players: [] as FootballPlayer[] };
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -4010,6 +4451,204 @@ function formatReadableDateLabel(yyyymmdd: string): string {
   return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
 }
 
+function mapPositionId(positionId?: number): string {
+  if (positionId === 11 || positionId === 0) return 'GK';
+  if (typeof positionId === 'number' && positionId >= 30 && positionId < 60) return 'DF';
+  if (typeof positionId === 'number' && positionId >= 60 && positionId < 85) return 'MF';
+  if (typeof positionId === 'number' && positionId >= 85) return 'FW';
+  return 'MF';
+}
+
+function formatFotmobMinute(time?: number | string, overloadTime?: number | null): string {
+  if (time === undefined || time === null) return "0'";
+  if (overloadTime && Number(overloadTime) > 0) {
+    return `${time}+${overloadTime}'`;
+  }
+  return `${time}'`;
+}
+
+function parseFotmobMatchDetailPayload(det: any) {
+  const rawEvents: any[] = det?.content?.matchFacts?.events?.events || [];
+  const parsedEvents: any[] = [];
+
+  for (let i = 0; i < rawEvents.length; i++) {
+    const ev = rawEvents[i];
+    if (!ev || ev.type === 'Half' || ev.type === 'AddedTime') continue;
+    const team: 'home' | 'away' = ev.isHome ? 'home' : 'away';
+    const minute = formatFotmobMinute(ev.timeStr ?? ev.time, ev.overloadTime);
+    const id = `ev_${ev.eventId || i}_${ev.type}`;
+
+    if (ev.type === 'Goal') {
+      const isOwnGoal = Boolean(ev.ownGoal || ev.goalDescriptionKey === 'owngoal' || ev.suffix === 'OG');
+      const isPenalty = Boolean(ev.goalDescriptionKey === 'penalty' || String(ev.goalDescription || '').toLowerCase().includes('pen'));
+      parsedEvents.push({
+        id,
+        minute,
+        type: isOwnGoal ? 'own_goal' : isPenalty ? 'penalty_goal' : 'goal',
+        player: ev.player?.name || ev.nameStr || ev.fullName || 'Scorer',
+        assist: ev.assistStr || undefined,
+        detail: isOwnGoal ? 'Own Goal' : isPenalty ? 'Penalty' : undefined,
+        team,
+      });
+    } else if (ev.type === 'MissedPenalty' || String(ev.type || '').toLowerCase().includes('missed')) {
+      parsedEvents.push({
+        id,
+        minute,
+        type: 'missed_penalty',
+        player: ev.player?.name || ev.nameStr || ev.fullName || 'Player',
+        detail: ev.missedPenaltyStr || 'Missed Penalty',
+        team,
+      });
+    } else if (ev.type === 'Card') {
+      const cardType = String(ev.card || ev.cardDescription || '').toLowerCase();
+      const isRed = cardType.includes('red');
+      parsedEvents.push({
+        id,
+        minute,
+        type: isRed ? 'red_card' : 'yellow_card',
+        player: ev.player?.name || ev.nameStr || ev.fullName || 'Player',
+        detail: cardType.includes('yellowred') ? '2nd Yellow / Red Card' : isRed ? 'Red Card' : 'Yellow Card',
+        team,
+      });
+    } else if (ev.type === 'Substitution') {
+      const subIn = ev.swap?.[0]?.name || ev.player?.name || ev.nameStr || 'Sub In';
+      const subOut = ev.swap?.[1]?.name || undefined;
+      parsedEvents.push({
+        id,
+        minute,
+        type: 'substitution',
+        player: subIn,
+        assist: subOut ? `Out: ${subOut}` : undefined,
+        detail: 'Substitution',
+        team,
+      });
+    } else if (ev.type === 'VAR') {
+      parsedEvents.push({
+        id,
+        minute,
+        type: 'var',
+        player: ev.player?.name || ev.nameStr || 'VAR Check',
+        detail: ev.VARResult?.decision?.value || ev.goalDescription || 'VAR Review',
+        team,
+      });
+    }
+  }
+
+  // Parse Stats
+  const statGroups: any[] = det?.content?.stats?.Periods?.All?.stats || [];
+  const allStatRows: any[] = statGroups.flatMap((g: any) => (Array.isArray(g?.stats) ? g.stats : []));
+  const findStatPair = (keys: string[], fallback: [number, number]): [number, number] => {
+    const row = allStatRows.find(
+      (s: any) => keys.includes(String(s?.key || '').toLowerCase()) || keys.includes(String(s?.title || '').toLowerCase())
+    );
+    if (!row || !Array.isArray(row.stats)) return fallback;
+    const a = parseFloat(String(row.rawStats?.[0]?.value ?? row.stats[0] ?? fallback[0]));
+    const b = parseFloat(String(row.rawStats?.[1]?.value ?? row.stats[1] ?? fallback[1]));
+    return [isNaN(a) ? fallback[0] : a, isNaN(b) ? fallback[1] : b];
+  };
+
+  const yellowFromEvents: [number, number] = [
+    parsedEvents.filter(e => e.team === 'home' && e.type === 'yellow_card').length,
+    parsedEvents.filter(e => e.team === 'away' && e.type === 'yellow_card').length,
+  ];
+  const redFromEvents: [number, number] = [
+    parsedEvents.filter(e => e.team === 'home' && e.type === 'red_card').length,
+    parsedEvents.filter(e => e.team === 'away' && e.type === 'red_card').length,
+  ];
+
+  const stats = {
+    possession: findStatPair(['ballpossesion', 'ball possession'], [50, 50]),
+    shots: findStatPair(['total_shots', 'total shots'], [0, 0]),
+    shotsOnTarget: findStatPair(['shotsontarget', 'shots on target'], [0, 0]),
+    corners: findStatPair(['corners'], [0, 0]),
+    fouls: findStatPair(['fouls', 'fouls committed'], [0, 0]),
+    yellowCards: findStatPair(['yellow_cards', 'yellow cards'], yellowFromEvents),
+    redCards: findStatPair(['red_cards', 'red cards'], redFromEvents),
+    xg: findStatPair(['expected_goals', 'expected goals (xg)'], [0, 0]),
+  };
+
+  // Parse Lineups
+  const lu = det?.content?.lineup || {};
+  const mapLineupList = (list: any[]) =>
+    (Array.isArray(list) ? list : []).slice(0, 15).map((p: any) => ({
+      number: Number(p.shirtNumber) || 0,
+      name: p.name || p.lastName || 'Player',
+      position: mapPositionId(p.positionId ?? p.usualPlayingPositionId),
+      isCaptain: Boolean(p.isCaptain),
+      rating: typeof p.performance?.rating === 'number' ? p.performance.rating : undefined,
+    }));
+
+  const lineups = {
+    home: mapLineupList(lu?.homeTeam?.starters || []),
+    away: mapLineupList(lu?.awayTeam?.starters || []),
+  };
+
+  const infoBox = det?.content?.matchFacts?.infoBox || {};
+  return {
+    events: parsedEvents,
+    stats,
+    lineups,
+    venue: infoBox?.Stadium?.name || det?.general?.venue || undefined,
+    referee: infoBox?.Referee?.text || undefined,
+    minute: det?.header?.status?.liveTime?.short || undefined,
+    homeScore: det?.header?.teams?.[0]?.score,
+    awayScore: det?.header?.teams?.[1]?.score,
+  };
+}
+
+async function fetchFotmobMatchDetailsCached(rawMatchId: string | number) {
+  const cleanId = String(rawMatchId).replace(/^match_/i, '').trim();
+  if (!cleanId || !/^\d+$/.test(cleanId)) return null;
+
+  const existing = matchDetailsCache.get(cleanId);
+  const ttl = existing?.finished ? MATCH_DETAIL_FINISHED_TTL_MS : MATCH_DETAIL_LIVE_TTL_MS;
+  if (existing && Date.now() - existing.timestamp < ttl) {
+    return existing.data;
+  }
+
+  try {
+    const res = await fetch(`https://www.fotmob.com/api/data/matchDetails?matchId=${encodeURIComponent(cleanId)}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; FutfieldEngine/1.0)',
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return existing?.data || null;
+    const det = await res.json();
+    const parsed = parseFotmobMatchDetailPayload(det);
+    const isFinished = Boolean(det?.header?.status?.finished);
+    matchDetailsCache.set(cleanId, { timestamp: Date.now(), finished: isFinished, data: parsed });
+    return parsed;
+  } catch {
+    return existing?.data || null;
+  }
+}
+
+async function enrichMatchesWithDetails(formattedMatches: any[]) {
+  const candidates = formattedMatches
+    .filter(m => m.status === 'LIVE' || m.status === 'FINISHED')
+    .slice(0, 18);
+
+  const batchSize = 5;
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    const chunk = candidates.slice(i, i + batchSize);
+    await Promise.allSettled(
+      chunk.map(async m => {
+        const details = await fetchFotmobMatchDetailsCached(m.rawId || m.id);
+        if (details) {
+          m.events = details.events;
+          m.stats = details.stats;
+          m.lineups = details.lineups;
+          if (details.venue) m.venue = details.venue;
+          if (details.referee) m.referee = details.referee;
+          if (details.minute && m.status === 'LIVE') m.minute = details.minute;
+        }
+      })
+    );
+  }
+}
+
 // Background warm-up and cache refresher
 async function refreshMatchesCache(targetDate?: string) {
   const today = getDateOffsetYYYYMMDD(0);
@@ -4021,7 +4660,7 @@ async function refreshMatchesCache(targetDate?: string) {
   }
 
   try {
-    const data = await withTimeout(getFotmobMatches({ date: dateToFetch }), 2800, 'getFotmobMatches');
+    const data = await withTimeout(getFotmobMatches({ date: dateToFetch }), 3200, 'getFotmobMatches');
     const leagues = data?.leagues || [];
     const formattedMatches: any[] = [];
     const dateLabel = formatReadableDateLabel(dateToFetch);
@@ -4054,12 +4693,14 @@ async function refreshMatchesCache(targetDate?: string) {
         const kickoff = matchObj.time || matchObj.status?.startTimeStr || '20:00';
         const stadiumName = matchObj.status?.venue || 'Football Stadium';
 
+        const cachedDet = matchDetailsCache.get(String(matchObj.id))?.data;
+
         formattedMatches.push({
           id: `match_${matchObj.id}`,
           rawId: matchObj.id,
-          league: `${leagueName} · 2026/27`,
+          league: `${leagueName}`,
           status: statusType,
-          minute: isLive ? minuteStr : undefined,
+          minute: cachedDet?.minute || (isLive ? minuteStr : undefined),
           dateStr: dateLabel,
           timeStr: kickoff,
           kickoffTime: kickoff,
@@ -4079,30 +4720,36 @@ async function refreshMatchesCache(targetDate?: string) {
             score: typeof matchObj.away?.score === 'number' ? matchObj.away.score : 0,
             color: '#3B82F6',
           },
-          venue: stadiumName,
-          stadium: stadiumName,
-          referee: 'FIFA Official',
+          venue: cachedDet?.venue || stadiumName,
+          stadium: cachedDet?.venue || stadiumName,
+          referee: cachedDet?.referee || 'Match Official',
           activeFansCount: matchReactionCounts[`match_${matchObj.id}`] || 0,
-          events: [],
-          lineups: { home: [], away: [] },
-          stats: {
+          events: cachedDet?.events || [],
+          lineups: cachedDet?.lineups || { home: [], away: [] },
+          stats: cachedDet?.stats || {
             possession: [50, 50],
-            shots: [10, 8],
-            shotsOnTarget: [4, 3],
-            corners: [5, 4],
-            fouls: [8, 9],
-            yellowCards: [1, 2],
+            shots: [0, 0],
+            shotsOnTarget: [0, 0],
+            corners: [0, 0],
+            fouls: [0, 0],
+            yellowCards: [0, 0],
             redCards: [0, 0],
-            xg: [1.1, 0.9],
+            xg: [0, 0],
           },
         });
       }
     }
 
     if (formattedMatches.length > 0) {
+      // Enrich live/finished fixtures right away on first fetch if not cached, up to 2.5s budget
+      await Promise.race([
+        enrichMatchesWithDetails(formattedMatches),
+        new Promise(r => setTimeout(r, 2400)),
+      ]);
+
       const responseData = {
         success: true,
-        source: 'FotMob Free Live Engine',
+        source: 'FotMob Live Global Feed',
         date: dateToFetch,
         count: formattedMatches.length,
         liveCount: formattedMatches.filter(m => m.status === 'LIVE').length,
@@ -4132,7 +4779,7 @@ async function refreshMatchesCache(targetDate?: string) {
   };
 }
 
-// Warm up Yesterday, Today, and Tomorrow after server binds port 3000, and refresh every 30s
+// Warm up Yesterday, Today, and Tomorrow in long-running server only (serverless executes on demand)
 async function warmMultiDayMatches() {
   await Promise.allSettled([
     refreshMatchesCache(getDateOffsetYYYYMMDD(0)),
@@ -4140,9 +4787,11 @@ async function warmMultiDayMatches() {
     refreshMatchesCache(getDateOffsetYYYYMMDD(1)),
   ]);
 }
-setInterval(() => {
-  refreshMatchesCache(getDateOffsetYYYYMMDD(0)).catch(() => {});
-}, 30_000);
+if (!IS_SERVERLESS) {
+  setInterval(() => {
+    refreshMatchesCache(getDateOffsetYYYYMMDD(0)).catch(() => {});
+  }, 30_000);
+}
 
 app.get('/api/football/status', async (req, res) => {
   const startTime = Date.now();
@@ -4157,7 +4806,7 @@ app.get('/api/football/status', async (req, res) => {
     pingLatencyMs,
     trackedLeaguesCount: TOP_10_LEAGUES.length,
     top10LeaguesCoverage: TOP_10_LEAGUES.length,
-    registeredPlayersDatabase: TOP_10_LEAGUE_PLAYERS.length,
+    registeredPlayersDatabase: TOP_10_LEAGUE_PLAYERS.length + livePlayersCache.players.length,
     supabaseConnected: Boolean(supabaseBackendClient),
     aiAssistantActive: Boolean(aiClient),
     cachedMatchesCount: cachedMatchesResponse?.count || 0,
@@ -4170,7 +4819,6 @@ app.get('/api/football/live', async (req, res) => {
   const today = getDateOffsetYYYYMMDD(0);
   const targetDate = requestedDate ? requestedDate.replace(/-/g, '') : today;
 
-  // Instant cache hit (0-1ms)
   const cachedForDate = matchesCacheByDate.get(targetDate);
   if (cachedForDate?.data) {
     if (Date.now() - cachedForDate.timestamp > MATCH_CACHE_TTL_MS) {
@@ -4187,16 +4835,232 @@ app.get('/api/football/live', async (req, res) => {
   return res.json(result);
 });
 
-// -------------------------------------------------------------
-// Top 10 Leagues Football Players Catalog & Global Live Search
-// -------------------------------------------------------------
-app.get('/api/football/leagues', (req, res) => {
-  res.json({
+// Flashscore-style Real-Time Single Match Preview & Full Event Timeline Endpoint
+app.get('/api/football/match/:id', async (req, res) => {
+  const { id } = req.params;
+  const cleanId = String(id).replace(/^match_/i, '').trim();
+
+  // Check cached fixtures across dates first for base metadata
+  let baseMatch: any = null;
+  for (const cached of matchesCacheByDate.values()) {
+    const found = (cached?.data?.matches || []).find(
+      (m: any) => String(m.id) === String(id) || String(m.rawId) === cleanId
+    );
+    if (found) {
+      baseMatch = { ...found };
+      break;
+    }
+  }
+
+  const details = await fetchFotmobMatchDetailsCached(cleanId);
+  if (!details && !baseMatch) {
+    return res.status(404).json({ success: false, error: 'Match not found in live schedule.' });
+  }
+
+  const merged = {
+    ...(baseMatch || {
+      id: `match_${cleanId}`,
+      rawId: cleanId,
+      league: 'Live Football Match',
+      status: 'LIVE',
+      homeTeam: { id: 'h', name: 'Home', shortName: 'HOM', crest: '', score: details?.homeScore ?? 0 },
+      awayTeam: { id: 'a', name: 'Away', shortName: 'AWY', crest: '', score: details?.awayScore ?? 0 },
+      dateStr: 'TODAY',
+      timeStr: 'Live',
+      activeFansCount: 0,
+    }),
+    ...(details
+      ? {
+          events: details.events,
+          stats: details.stats,
+          lineups: details.lineups,
+          venue: details.venue || baseMatch?.venue || 'Stadium',
+          referee: details.referee || baseMatch?.referee || 'Match Official',
+          minute: details.minute || baseMatch?.minute,
+          homeTeam: {
+            ...(baseMatch?.homeTeam || {}),
+            score: typeof details.homeScore === 'number' ? details.homeScore : (baseMatch?.homeTeam?.score ?? 0),
+          },
+          awayTeam: {
+            ...(baseMatch?.awayTeam || {}),
+            score: typeof details.awayScore === 'number' ? details.awayScore : (baseMatch?.awayTeam?.score ?? 0),
+          },
+        }
+      : {}),
+  };
+
+  return res.json({
     success: true,
-    count: TOP_10_LEAGUES.length,
-    leagues: TOP_10_LEAGUES,
+    source: 'FotMob MatchDetails Live',
+    match: merged,
   });
 });
+
+// -------------------------------------------------------------
+// Top 10 Leagues + Live Fixtures Counter & Player Scout Live APIs
+// -------------------------------------------------------------
+const LEAGUE_FOTMOB_MAPPING: Record<string, number> = {
+  'premier-league': 47,
+  'la-liga': 87,
+  'serie-a': 55,
+  'bundesliga': 54,
+  'ligue-1': 53,
+  'eredivisie': 57,
+  'primeira-liga': 61,
+  'mls': 134,
+  'saudi-pro-league': 9900,
+  'brasileirao': 112,
+};
+
+app.get('/api/football/leagues', async (_req, res) => {
+  // Ensure today's fixtures are loaded so league live counts are real-time
+  if (!cachedMatchesResponse) {
+    await refreshMatchesCache(getDateOffsetYYYYMMDD(0)).catch(() => {});
+  }
+  const todayMatches: any[] = cachedMatchesResponse?.matches || [];
+
+  const enrichedLeagues = TOP_10_LEAGUES.map(lg => {
+    const keyLower = lg.name.toLowerCase();
+    const matching = todayMatches.filter((m: any) =>
+      String(m.league || '').toLowerCase().includes(keyLower)
+    );
+    return {
+      ...lg,
+      fotmobId: LEAGUE_FOTMOB_MAPPING[lg.id] || 47,
+      liveCount: matching.filter(m => m.status === 'LIVE').length,
+      todayCount: matching.length,
+    };
+  });
+
+  return res.json({
+    success: true,
+    source: 'FotMob Real-Time Network',
+    count: enrichedLeagues.length,
+    leagues: enrichedLeagues,
+    syncedAt: new Date().toISOString(),
+  });
+});
+
+async function refreshLivePlayersPool(): Promise<FootballPlayer[]> {
+  if (livePlayersCache.players.length > 0 && Date.now() - livePlayersCache.timestamp < 5 * 60_000) {
+    return livePlayersCache.players;
+  }
+
+  const dynamicPlayers: FootballPlayer[] = [];
+  const seenNames = new Set<string>(TOP_10_LEAGUE_PLAYERS.map(p => p.name.toLowerCase()));
+
+  // Extract live goalscorers & starters from enriched today/yesterday matches
+  for (const cached of matchesCacheByDate.values()) {
+    const matchesList = cached?.data?.matches || [];
+    for (const m of matchesList) {
+      const leagueLabel = String(m.league || 'Global League').split('·')[0].trim();
+      for (const ev of m.events || []) {
+        if ((ev.type === 'goal' || ev.type === 'penalty_goal') && ev.player) {
+          const cleanName = String(ev.player).trim();
+          const key = cleanName.toLowerCase();
+          if (!cleanName || seenNames.has(key)) continue;
+          seenNames.add(key);
+          const clubName = ev.team === 'home' ? m.homeTeam?.name : m.awayTeam?.name;
+          dynamicPlayers.push({
+            id: `live_scorer_${key.replace(/[^a-z0-9]/g, '_')}`,
+            name: cleanName,
+            shortName: cleanName.split(' ').pop() || cleanName,
+            number: 9,
+            position: 'FW',
+            specificRole: 'Matchday Scorer (Live)',
+            club: clubName || 'Club',
+            clubCrest: '⚽',
+            league: leagueLabel,
+            leagueCountry: 'International',
+            nationality: 'International',
+            countryFlag: '🌍',
+            age: 25,
+            rating: 85,
+            marketValue: 'Live Form',
+            photoUrl: DEFAULT_AVATAR,
+            stats: { appearances: 1, goals: 1, assists: 0, passAccuracy: 83 },
+            preferredFoot: 'Right',
+            playingStyle: `Live scorer in ${m.homeTeam?.name} vs ${m.awayTeam?.name}`,
+            bio: `Scored at ${ev.minute} in ${m.homeTeam?.name} vs ${m.awayTeam?.name} (${leagueLabel}).`,
+          });
+        }
+      }
+      // Pull top rated starters if available
+      for (const side of ['home', 'away'] as const) {
+        const teamName = side === 'home' ? m.homeTeam?.name : m.awayTeam?.name;
+        for (const lp of (m.lineups?.[side] || []).slice(0, 11)) {
+          const cleanName = String(lp.name || '').trim();
+          const key = cleanName.toLowerCase();
+          if (!cleanName || seenNames.has(key)) continue;
+          seenNames.add(key);
+          const pos = (['GK', 'DF', 'MF', 'FW'].includes(lp.position) ? lp.position : 'MF') as 'GK' | 'DF' | 'MF' | 'FW';
+          dynamicPlayers.push({
+            id: `live_xi_${key.replace(/[^a-z0-9]/g, '_')}`,
+            name: cleanName,
+            shortName: cleanName.split(' ').pop() || cleanName,
+            number: Number(lp.number) || 10,
+            position: pos,
+            specificRole: `${pos} Starter (Live XI)`,
+            club: teamName || 'Club',
+            clubCrest: '⚽',
+            league: leagueLabel,
+            leagueCountry: 'International',
+            nationality: 'International',
+            countryFlag: '🌍',
+            age: 25,
+            rating: lp.rating ? Math.min(94, Math.max(76, Math.round(lp.rating * 10 + 12))) : 82,
+            marketValue: 'Active XI',
+            photoUrl: DEFAULT_AVATAR,
+            stats: { appearances: 1, goals: 0, assists: 0, passAccuracy: 84 },
+            preferredFoot: 'Right',
+            playingStyle: 'Matchday Starting XI',
+            bio: `Selected in starting lineup for ${teamName} in ${leagueLabel}.`,
+          });
+        }
+      }
+    }
+  }
+
+  // Also pull live Premier League & La Liga top scorers from FotMob league stats
+  try {
+    const leagueDet: any = await withTimeout(getLeagueDetails({ id: 47 }), 2500, 'getLeagueDetails');
+    const scorerSections = leagueDet?.stats?.players || [];
+    for (const sec of scorerSections.slice(0, 2)) {
+      for (const p of (sec?.topThree || []).concat(sec?.list || []).slice(0, 8)) {
+        const pName = String(p?.name || '').trim();
+        if (!pName || seenNames.has(pName.toLowerCase())) continue;
+        seenNames.add(pName.toLowerCase());
+        const pid = p?.id;
+        dynamicPlayers.push({
+          id: pid ? `live_${pid}` : `live_pl_${pName.toLowerCase().replace(/\s+/g, '_')}`,
+          name: pName,
+          shortName: pName.split(' ').pop() || pName,
+          number: 10,
+          position: 'FW',
+          specificRole: sec?.header || 'Top Performer',
+          club: p?.teamName || 'Premier League',
+          clubCrest: '⚽',
+          league: 'Premier League',
+          leagueCountry: 'England',
+          nationality: 'International',
+          countryFlag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
+          age: 25,
+          rating: 86,
+          marketValue: 'Top Scorer List',
+          photoUrl: pid ? `https://images.fotmob.com/image_resources/playerimages/${pid}.png` : DEFAULT_AVATAR,
+          stats: { appearances: 20, goals: Number(p?.value) || 8, assists: 4, passAccuracy: 83 },
+          preferredFoot: 'Right',
+          playingStyle: 'Premier League Live Leader',
+          bio: `${pName} (${p?.teamName || 'Premier League'}) featured in FotMob live season stats.`,
+        });
+      }
+    }
+  } catch {}
+
+  livePlayersCache.timestamp = Date.now();
+  livePlayersCache.players = dynamicPlayers.slice(0, 80);
+  return livePlayersCache.players;
+}
 
 app.get('/api/football/players', async (req, res) => {
   const { query = '', league = 'all', position = 'all', sort = 'rating' } = req.query as {
@@ -4206,7 +5070,12 @@ app.get('/api/football/players', async (req, res) => {
     sort?: string;
   };
 
-  let results: FootballPlayer[] = [...TOP_10_LEAGUE_PLAYERS];
+  if (!cachedMatchesResponse) {
+    await refreshMatchesCache(getDateOffsetYYYYMMDD(0)).catch(() => {});
+  }
+
+  const livePool = await refreshLivePlayersPool();
+  let results: FootballPlayer[] = [...TOP_10_LEAGUE_PLAYERS, ...livePool];
 
   if (league && league !== 'all') {
     const matchedLeague = TOP_10_LEAGUES.find(
@@ -4214,7 +5083,7 @@ app.get('/api/football/players', async (req, res) => {
     );
     const targetName = matchedLeague ? matchedLeague.name.toLowerCase() : league.toLowerCase();
     results = results.filter(
-      p => p.league.toLowerCase() === targetName || p.id.toLowerCase().includes(league.toLowerCase())
+      p => p.league.toLowerCase().includes(targetName) || p.id.toLowerCase().includes(league.toLowerCase())
     );
   }
 
@@ -4233,40 +5102,35 @@ app.get('/api/football/players', async (req, res) => {
         p.specificRole.toLowerCase().includes(q)
     );
 
-    if (results.length < 5) {
+    if (results.length < 8) {
       try {
-        const liveSearchData = await withTimeout(getFotmobSearch({ term: query.trim() }), 2500, 'getFotmobSearch');
+        const liveSearchData = await withTimeout(getFotmobSearch({ term: query.trim() }), 2800, 'getFotmobSearch');
         const allSuggestions = (liveSearchData || []).flatMap((g: any) => g.suggestions || []);
-        const playerHits = allSuggestions.filter((s: any) => s.type === 'player').slice(0, 8);
+        const playerHits = allSuggestions.filter((s: any) => s.type === 'player').slice(0, 10);
 
         for (const hit of playerHits) {
-          if (!results.some(r => r.name.toLowerCase() === hit.name.toLowerCase())) {
+          if (!results.some(r => r.name.toLowerCase() === String(hit.name || '').toLowerCase())) {
             results.push({
               id: `live_${hit.id}`,
               name: hit.name,
               shortName: hit.name.split(' ').pop() || hit.name,
               number: 10,
               position: 'FW',
-              specificRole: 'Professional Footballer',
+              specificRole: 'Live Searched Player',
               club: hit.teamName || 'Professional Club',
               clubCrest: '⚽',
-              league: 'Top World League',
+              league: 'Global Football',
               leagueCountry: 'International',
               nationality: 'Global',
               countryFlag: '🌍',
               age: 25,
               rating: 84,
-              marketValue: '€35M',
-              photoUrl: DEFAULT_AVATAR,
-              stats: {
-                appearances: 22,
-                goals: 8,
-                assists: 5,
-                passAccuracy: 82,
-              },
+              marketValue: 'Live Profile',
+              photoUrl: hit.id ? `https://images.fotmob.com/image_resources/playerimages/${hit.id}.png` : DEFAULT_AVATAR,
+              stats: { appearances: 20, goals: 6, assists: 4, passAccuracy: 82 },
               preferredFoot: 'Right',
-              playingStyle: 'Dynamic Playmaker',
-              bio: `${hit.name} is a professional footballer playing for ${hit.teamName || 'top tier football'}.`,
+              playingStyle: 'Live Scout Match',
+              bio: `${hit.name} fetched live from FotMob global player search (${hit.teamName || 'World Football'}).`,
             });
           }
         }
@@ -4288,70 +5152,82 @@ app.get('/api/football/players', async (req, res) => {
 
   res.json({
     success: true,
+    source: 'FotMob Live + Curated Top 10 Leagues',
     totalCount: results.length,
     leagues: TOP_10_LEAGUES,
     players: results,
+    syncedAt: new Date().toISOString(),
   });
 });
 
 app.get('/api/football/player/:id', async (req, res) => {
   const { id } = req.params;
 
-  const localPlayer = TOP_10_LEAGUE_PLAYERS.find(p => p.id === id);
-  if (localPlayer) {
-    return res.json({ success: true, player: localPlayer });
-  }
+  const localPlayer = TOP_10_LEAGUE_PLAYERS.find(p => p.id === id) || livePlayersCache.players.find(p => p.id === id);
 
   if (id.startsWith('live_')) {
     const rawId = id.replace('live_', '');
-    try {
-      const details: any = await withTimeout(getFotmobPlayerDetails({ id: parseInt(rawId, 10) }), 2500, 'getFotmobPlayerDetails');
-      return res.json({
-        success: true,
-        player: {
-          id,
-          name: details?.name || 'Footballer',
-          shortName: details?.name?.split(' ').pop() || 'Player',
-          number: details?.primaryTeam?.jerseyNumber || 10,
-          position: details?.primaryTeam?.role || 'MF',
-          specificRole: 'Professional Footballer',
-          club: details?.primaryTeam?.teamName || 'Professional Club',
-          clubCrest: '⚽',
-          league: 'International League',
-          leagueCountry: 'Global',
-          nationality: details?.birthDate ? 'International' : 'Global',
-          countryFlag: '🌍',
-          age: details?.age || 26,
-          rating: 84,
-          marketValue: '€30M',
-          photoUrl: DEFAULT_AVATAR,
-          stats: { appearances: 20, goals: 7, assists: 4, passAccuracy: 83 },
-          preferredFoot: 'Right',
-          playingStyle: 'Professional Playmaker',
-          bio: details?.bio || 'Professional football player profile from live database.',
-        },
-      });
-    } catch (e: any) {
-      console.warn('[Backend] Fotmob player detail note:', e?.message);
+    if (/^\d+$/.test(rawId)) {
+      try {
+        const details: any = await withTimeout(getFotmobPlayerDetails({ id: parseInt(rawId, 10) }), 3000, 'getFotmobPlayerDetails');
+        if (details) {
+          const posName = String(details?.positionDescription?.primaryPosition?.label || '').toLowerCase();
+          const mappedPos: 'GK' | 'DF' | 'MF' | 'FW' = posName.includes('goal')
+            ? 'GK'
+            : posName.includes('back') || posName.includes('def')
+            ? 'DF'
+            : posName.includes('mid')
+            ? 'MF'
+            : 'FW';
+          const mainStats = details?.mainLeague?.stats || [];
+          const findStat = (title: string) => {
+            const found = mainStats.find((s: any) => String(s.title || '').toLowerCase().includes(title));
+            return Number(found?.value) || 0;
+          };
+          return res.json({
+            success: true,
+            source: 'FotMob PlayerDetails Live',
+            player: {
+              id,
+              name: details?.name || localPlayer?.name || 'Footballer',
+              shortName: (details?.name || 'Player').split(' ').pop() || 'Player',
+              number: Number(details?.primaryTeam?.jerseyNumber || details?.meta?.shirtNumber || 10),
+              position: mappedPos,
+              specificRole: details?.positionDescription?.primaryPosition?.label || 'Professional Footballer',
+              club: details?.primaryTeam?.teamName || localPlayer?.club || 'Professional Club',
+              clubCrest: '⚽',
+              league: details?.mainLeague?.leagueName || localPlayer?.league || 'League',
+              leagueCountry: 'International',
+              nationality: details?.birthDate ? 'International' : 'Global',
+              countryFlag: '🌍',
+              age: details?.age || localPlayer?.age || 25,
+              rating: 85,
+              marketValue: details?.playerInformation?.find((x: any) => x.title === 'Market value')?.value?.fallback || 'Pro Player',
+              photoUrl: `https://images.fotmob.com/image_resources/playerimages/${rawId}.png`,
+              stats: {
+                appearances: findStat('matches') || findStat('started') || localPlayer?.stats.appearances || 18,
+                goals: findStat('goals') || localPlayer?.stats.goals || 5,
+                assists: findStat('assists') || localPlayer?.stats.assists || 3,
+                passAccuracy: findStat('pass') || 83,
+              },
+              preferredFoot: details?.playerInformation?.find((x: any) => x.title === 'Preferred foot')?.value?.fallback || 'Right',
+              playingStyle: details?.positionDescription?.primaryPosition?.label || 'Playmaker',
+              bio: `${details?.name || 'Player'} live profile synchronized from FotMob (${details?.primaryTeam?.teamName || 'Club'}).`,
+            },
+          });
+        }
+      } catch (e: any) {
+        console.warn('[Backend] Fotmob player detail note:', e?.message);
+      }
     }
   }
 
-  return res.status(404).json({ error: 'Player not found in top leagues registry' });
-});
+  if (localPlayer) {
+    return res.json({ success: true, source: 'Curated Top 10 Leagues', player: localPlayer });
+  }
 
-// Live League Table Standings Endpoint powered by FotMob (Timeout + 5min Cache + Points Gap)
-const LEAGUE_FOTMOB_MAPPING: Record<string, string> = {
-  'premier-league': '47',
-  'la-liga': '87',
-  'serie-a': '55',
-  'bundesliga': '54',
-  'ligue-1': '53',
-  'eredivisie': '57',
-  'primeira-liga': '61',
-  'mls': '134',
-  'saudi-pro-league': '9900',
-  'brasileirao': '112',
-};
+  return res.status(404).json({ success: false, error: 'Player not found in live or curated registry' });
+});
 
 app.get('/api/football/leagues/:leagueId/table', async (req, res) => {
   const { leagueId } = req.params;
@@ -4361,40 +5237,46 @@ app.get('/api/football/leagues/:leagueId/table', async (req, res) => {
     return res.json(cached.data);
   }
 
-  const fotmobId = LEAGUE_FOTMOB_MAPPING[cacheKey] || '47';
+  const fotmobId = LEAGUE_FOTMOB_MAPPING[cacheKey] || 47;
 
   try {
-    const tableData: any = await withTimeout(getLeagueTable({ leagueId: parseInt(fotmobId, 10) }), 2800, 'getLeagueTable');
-    if (tableData && tableData.table) {
-      const standingsRaw = tableData.table.all || tableData.table[0]?.data?.table?.all || [];
-      if (Array.isArray(standingsRaw) && standingsRaw.length > 0) {
-        const leaderPoints = Number(standingsRaw[0]?.pts || 0);
-        const formatted = {
-          success: true,
-          leagueId,
-          leagueName: tableData.leagueName || leagueId,
-          standings: standingsRaw.map((row: any) => {
-            const pts = Number(row.pts || 0);
-            const gf = parseInt(row.scoresStr?.split('-')[0] || '0', 10);
-            const ga = parseInt(row.scoresStr?.split('-')[1] || '0', 10);
-            return {
-              position: row.idx || row.position || 1,
-              teamName: row.name || row.shortName || 'Team',
-              played: row.played || 0,
-              won: row.wins || 0,
-              drawn: row.draws || 0,
-              lost: row.losses || 0,
-              goalsFor: gf,
-              goalsAgainst: ga,
-              goalDifference: typeof row.goalConDiff === 'number' ? row.goalConDiff : gf - ga,
-              points: pts,
-              pointsGap: leaderPoints - pts,
-            };
-          }),
-        };
-        leagueTableCache.set(cacheKey, { timestamp: Date.now(), data: formatted });
-        return res.json(formatted);
-      }
+    const tableData: any = await withTimeout(getLeagueTable({ leagueId: fotmobId }), 3500, 'getLeagueTable');
+    const standingsRaw =
+      tableData?.table?.all ||
+      tableData?.table?.[0]?.data?.table?.all ||
+      [];
+    if (Array.isArray(standingsRaw) && standingsRaw.length > 0) {
+      const leaderPoints = Number(standingsRaw[0]?.pts || 0);
+      const formatted = {
+        success: true,
+        source: 'FotMob Live Standings',
+        leagueId,
+        leagueName: tableData.leagueName || TOP_10_LEAGUES.find(l => l.id === cacheKey)?.name || leagueId,
+        standings: standingsRaw.map((row: any, i: number) => {
+          const pts = Number(row.pts || 0);
+          const scoresParts = String(row.scoresStr || '0-0').split('-');
+          const gf = parseInt(scoresParts[0] || '0', 10) || 0;
+          const ga = parseInt(scoresParts[1] || '0', 10) || 0;
+          return {
+            position: row.idx || row.position || i + 1,
+            teamId: row.id,
+            teamName: row.name || row.shortName || 'Team',
+            logoUrl: row.id ? `https://images.fotmob.com/image_resources/logo/teamlogo/${row.id}.png` : undefined,
+            played: row.played || 0,
+            won: row.wins || 0,
+            drawn: row.draws || 0,
+            lost: row.losses || 0,
+            goalsFor: gf,
+            goalsAgainst: ga,
+            goalDifference: typeof row.goalConDiff === 'number' ? row.goalConDiff : gf - ga,
+            points: pts,
+            pointsGap: leaderPoints - pts,
+            qualColor: row.qualColor,
+          };
+        }),
+      };
+      leagueTableCache.set(cacheKey, { timestamp: Date.now(), data: formatted });
+      return res.json(formatted);
     }
   } catch (err: any) {
     console.warn('[Backend] League table fetch error:', err?.message);
@@ -4404,36 +5286,36 @@ app.get('/api/football/leagues/:leagueId/table', async (req, res) => {
     return res.json(cached.data);
   }
 
-  return res.json({
-    success: true,
+  return res.status(503).json({
+    success: false,
     leagueId,
-    leagueName: leagueId,
-    standings: [
-      { position: 1, teamName: 'Arsenal', played: 10, won: 9, drawn: 0, lost: 1, goalsFor: 22, goalsAgainst: 5, goalDifference: 17, points: 27, pointsGap: 0 },
-      { position: 2, teamName: 'Manchester City', played: 10, won: 8, drawn: 1, lost: 1, goalsFor: 24, goalsAgainst: 9, goalDifference: 15, points: 25, pointsGap: 2 },
-      { position: 3, teamName: 'Liverpool', played: 10, won: 7, drawn: 2, lost: 1, goalsFor: 20, goalsAgainst: 8, goalDifference: 12, points: 23, pointsGap: 4 },
-    ],
+    leagueName: TOP_10_LEAGUES.find(l => l.id === cacheKey)?.name || leagueId,
+    standings: [],
+    error: 'Live standings temporarily unavailable from upstream provider. Please retry.',
   });
 });
 
 // -------------------------------------------------------------
 // Vite middleware in dev OR static build in production
 // -------------------------------------------------------------
-process.on('uncaughtException', (err) => {
-  console.error('[FUTFIELD Server UncaughtException]', err);
-});
-process.on('unhandledRejection', (reason) => {
-  console.warn('[FUTFIELD Server UnhandledRejection]', reason);
-});
+if (!IS_SERVERLESS) {
+  process.on('uncaughtException', (err) => {
+    console.error('[FUTFIELD Server UncaughtException]', err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.warn('[FUTFIELD Server UnhandledRejection]', reason);
+  });
+}
 
 let viteMiddlewares: any = null;
 let viteInitPromise: Promise<void> | null = null;
 
 async function ensureViteInitialized() {
-  if (viteInitPromise) return viteInitPromise;
+  if (viteInitPromise || IS_SERVERLESS) return viteInitPromise;
   viteInitPromise = (async () => {
-    if (process.env.NODE_ENV !== 'production') {
-      const { createServer } = await import('vite');
+    if (process.env.NODE_ENV !== 'production' && !IS_SERVERLESS) {
+      const vitePkg = 'vite';
+      const { createServer } = await import(/* @vite-ignore */ vitePkg);
       const vite = await createServer({
         server: {
           middlewareMode: true,
@@ -4546,6 +5428,8 @@ app.get('/sitemap.xml', (_req, res) => {
   const staticUrls: Array<{ path: string; changefreq: 'daily' | 'weekly'; priority: string }> = [
     { path: '/', changefreq: 'weekly', priority: '1.0' },
     { path: '/live-scores', changefreq: 'daily', priority: '1.0' },
+    { path: '/highlights', changefreq: 'daily', priority: '0.9' },
+    { path: '/share', changefreq: 'weekly', priority: '0.85' },
     { path: '/features', changefreq: 'weekly', priority: '0.9' },
     { path: '/pricing', changefreq: 'weekly', priority: '0.9' },
     { path: '/blog', changefreq: 'weekly', priority: '0.9' },
@@ -4605,46 +5489,51 @@ app.get('/sitemap.xml', (_req, res) => {
   return res.send(xml);
 });
 
-if (process.env.NODE_ENV !== 'production') {
-  app.use(async (req, res, next) => {
-    if (
-      req.path.startsWith('/api/') ||
-      req.path.startsWith('/uploads/') ||
-      req.path === '/robots.txt' ||
-      req.path === '/sitemap.xml'
-    ) {
+if (!IS_SERVERLESS) {
+  if (process.env.NODE_ENV !== 'production') {
+    app.use(async (req, res, next) => {
+      if (
+        req.path.startsWith('/api/') ||
+        req.path.startsWith('/uploads/') ||
+        req.path === '/robots.txt' ||
+        req.path === '/sitemap.xml'
+      ) {
+        return next();
+      }
+      if (!viteMiddlewares) {
+        await ensureViteInitialized();
+      }
+      if (viteMiddlewares) {
+        return viteMiddlewares(req, res, next);
+      }
       return next();
+    });
+  } else {
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[FUTFIELD Server] Running on http://0.0.0.0:${PORT}`);
+    if (process.env.NODE_ENV !== 'production') {
+      ensureViteInitialized();
     }
-    if (!viteMiddlewares) {
-      await ensureViteInitialized();
-    }
-    if (viteMiddlewares) {
-      return viteMiddlewares(req, res, next);
-    }
-    return next();
+    setTimeout(() => {
+      warmMultiDayMatches().catch(() => {});
+    }, 150);
   });
-} else {
-  app.use(express.static(path.resolve(__dirname, 'dist')));
-  app.get('*', (_req, res) => {
-    res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[FUTFIELD Server] Port ${PORT} already in use!`);
+      process.exit(1);
+    } else {
+      console.error('[FUTFIELD Server Error]', err);
+    }
   });
 }
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[FUTFIELD Server] Running on http://0.0.0.0:${PORT}`);
-  if (process.env.NODE_ENV !== 'production') {
-    ensureViteInitialized();
-  }
-  setTimeout(() => {
-    warmMultiDayMatches().catch(() => {});
-  }, 150);
-});
+export { app };
 
-server.on('error', (err: any) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`[FUTFIELD Server] Port ${PORT} already in use!`);
-    process.exit(1);
-  } else {
-    console.error('[FUTFIELD Server Error]', err);
-  }
-});

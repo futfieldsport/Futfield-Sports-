@@ -25,13 +25,11 @@ import {
   Search,
   Bell,
   CheckCircle2,
-  Gift,
   TrendingUp,
   Radio,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { Post, PostComment } from '../../types/football';
-import { DailyHighlightStoryBar } from '../Videos/DailyHighlightReel';
 import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
 import { ClubLogo } from '../Common/ClubLogo';
 import {
@@ -45,7 +43,13 @@ import {
 } from '../../services/supabaseClient';
 import { haptics } from '../../utils/haptics';
 import { useHaptics } from '../../hooks/useHaptics';
-import { uploadFileToBackend, formatBytesToMb, inspectVideoMetadata } from '../../utils/mediaUpload';
+import {
+  uploadFileToBackend,
+  formatBytesToMb,
+  inspectVideoMetadata,
+  captureVideoPosterFrame,
+} from '../../utils/mediaUpload';
+import { buildShareUrl } from '../../utils/share';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
 
 const FEELINGS_LIST = [
@@ -78,20 +82,23 @@ export const HomeTab: React.FC = () => {
     isCreatorConnected,
     toggleConnectCreator,
     openCreatorProfile,
-    sendGiftToCreator,
-    mediaStorageStats,
     refreshMediaAndAnalytics,
+    openShareSheet,
+    openVideoInReels,
   } = useFootball();
 
   const { triggerMessage, triggerSuccess, triggerWarning } = useHaptics();
 
   const [activeFilter, setActiveFilter] = useState<'foryou' | 'following' | 'trending'>('foryou');
-  const [activeTippingPostId, setActiveTippingPostId] = useState<string | null>(null);
   const [hashtagFilter, setHashtagFilter] = useState<string | null>(null);
   const [content, setContent] = useState('');
   const [privacy, setPrivacy] = useState<'public' | 'followers' | 'private'>('public');
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
+  const [mediaThumbnailUrl, setMediaThumbnailUrl] = useState<string | null>(null);
+  const [mediaVideoKind, setMediaVideoKind] = useState<'short' | 'video' | null>(null);
+  const [mediaAspectRatio, setMediaAspectRatio] = useState<'9:16' | '16:9' | null>(null);
+  const [mediaDurationSec, setMediaDurationSec] = useState<number>(0);
   const [mediaSizeBytes, setMediaSizeBytes] = useState<number>(0);
   const [mediaSizeMb, setMediaSizeMb] = useState<number>(0);
   const [location, setLocation] = useState<string>('');
@@ -214,6 +221,10 @@ export const HomeTab: React.FC = () => {
     setUploadFileName(file.name);
     setMediaType('video');
     setMediaUrl(null);
+    setMediaThumbnailUrl(null);
+    setMediaVideoKind(null);
+    setMediaAspectRatio(null);
+    setMediaDurationSec(0);
     setUploadErrorMessage(null);
     setUploadStatus('uploading');
     setUploadProgress(5);
@@ -232,28 +243,50 @@ export const HomeTab: React.FC = () => {
       return;
     }
 
+    const detectedRatio: '9:16' | '16:9' = meta.detectedAspectRatio === '16:9' ? '16:9' : '9:16';
+    setMediaVideoKind(meta.videoKind);
+    setMediaAspectRatio(detectedRatio);
+    setMediaDurationSec(meta.duration || 0);
     setUploadProgress(15);
 
-    const res = await uploadFileToBackend(
-      file,
-      'post-videos',
-      file.name,
-      (pct) => setUploadProgress(pct),
-      user.id,
-      {
-        durationSeconds: meta.duration,
-        width: meta.width,
-        height: meta.height,
-        videoKind: meta.videoKind,
-        aspectRatio: meta.detectedAspectRatio === '16:9' ? '16:9' : '9:16',
-        title: content.trim().slice(0, 60) || file.name,
+    const [res, posterBlob] = await Promise.all([
+      uploadFileToBackend(
+        file,
+        'post-videos',
+        file.name,
+        (pct) => setUploadProgress(pct),
+        user.id,
+        {
+          durationSeconds: meta.duration,
+          width: meta.width,
+          height: meta.height,
+          videoKind: meta.videoKind,
+          aspectRatio: detectedRatio,
+          title: content.trim().slice(0, 60) || file.name,
+        }
+      ),
+      captureVideoPosterFrame(file).catch(() => null),
+    ]);
+
+    if (posterBlob) {
+      const thumbRes = await uploadFileToBackend(
+        posterBlob,
+        'video-thumbnails',
+        `${file.name.replace(/\.[^.]+$/, '')}-thumb.jpg`,
+        undefined,
+        user.id
+      ).catch(() => null);
+      if (thumbRes?.success && thumbRes.url) {
+        setMediaThumbnailUrl(thumbRes.url);
       }
-    );
+    }
 
     if (res.success && res.url) {
       setMediaUrl(res.url);
       if (res.sizeBytes) setMediaSizeBytes(res.sizeBytes);
       if (res.sizeMb) setMediaSizeMb(res.sizeMb);
+      if (res.videoKind) setMediaVideoKind(res.videoKind);
+      if (res.aspectRatio) setMediaAspectRatio(res.aspectRatio);
       setUploadProgress(100);
       setUploadStatus('uploaded');
       triggerSuccess();
@@ -280,6 +313,10 @@ export const HomeTab: React.FC = () => {
       mediaType: mediaType || undefined,
       imageUrl: mediaType === 'image' ? (mediaUrl || undefined) : undefined,
       videoUrl: mediaType === 'video' ? (mediaUrl || undefined) : undefined,
+      thumbnailUrl: mediaType === 'video' ? (mediaThumbnailUrl || undefined) : undefined,
+      videoKind: mediaType === 'video' ? (mediaVideoKind || undefined) : undefined,
+      aspectRatio: mediaType === 'video' ? (mediaAspectRatio || undefined) : undefined,
+      durationSeconds: mediaType === 'video' && mediaDurationSec ? mediaDurationSec : undefined,
       mediaSizeBytes: mediaSizeBytes || undefined,
       mediaSizeMb: mediaSizeMb || undefined,
       location: location.trim() || undefined,
@@ -302,6 +339,10 @@ export const HomeTab: React.FC = () => {
     setContent('');
     setMediaUrl(null);
     setMediaType(null);
+    setMediaThumbnailUrl(null);
+    setMediaVideoKind(null);
+    setMediaAspectRatio(null);
+    setMediaDurationSec(0);
     setMediaSizeBytes(0);
     setMediaSizeMb(0);
     setUploadStatus('idle');
@@ -338,30 +379,20 @@ export const HomeTab: React.FC = () => {
     });
   };
 
-  // Share Post
+  // Share Post directly to user's phone
   const handleShare = async (post: Post) => {
     setShareFeedbackId(post.id);
-    await sharePostOnServer(post.id);
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `FUTFIELD Post by ${post.author.name}`,
-          text: post.content,
-          url: window.location.href,
-        });
-      } catch {}
-    } else {
-      navigator.clipboard?.writeText(window.location.href);
-    }
-
-    addNotification({
-      title: 'Link Copied & Shared!',
-      body: 'Post shared to football community. +5 Fan Points earned.',
-      type: 'system',
+    sharePostOnServer(post.id).catch(() => {});
+    const authorHandle = post.author?.handle || '@fan';
+    openShareSheet({
+      kind: 'post',
+      targetId: post.id,
+      title: `FUTFIELD Post by ${post.author?.name || 'Supporter'}`,
+      text: post.content || 'Check out this matchday post on FUTFIELD!',
+      url: buildShareUrl(`/profile/${encodeURIComponent(authorHandle)}`),
+      previewImage: post.thumbnailUrl || post.imageUrl || post.author?.avatar,
     });
-    addFanPoints(5, 'Shared post');
-    setTimeout(() => setShareFeedbackId(null), 2500);
+    setTimeout(() => setShareFeedbackId(null), 2000);
   };
 
   // Add Comment or Reply
@@ -425,14 +456,15 @@ export const HomeTab: React.FC = () => {
   };
 
   const filteredPosts = posts.filter(p => {
+    if (!p) return false;
     if (hashtagFilter) {
       const matchTag = p.tags?.some(t => t.toLowerCase() === hashtagFilter.toLowerCase());
-      const matchContent = p.content.toLowerCase().includes(hashtagFilter.toLowerCase());
+      const matchContent = (p.content || '').toLowerCase().includes(hashtagFilter.toLowerCase());
       const matchClub = p.clubTag?.toLowerCase() === hashtagFilter.toLowerCase();
       if (!matchTag && !matchContent && !matchClub) return false;
     }
     if (activeFilter === 'foryou' || activeFilter === 'trending') return true;
-    return p.category === activeFilter || isCreatorConnected(p.author.handle);
+    return p.category === activeFilter || isCreatorConnected(p.author?.handle || '@fan');
   });
 
   // Trending sorts by real engagement; For You/Following prioritize connected creators
@@ -440,8 +472,8 @@ export const HomeTab: React.FC = () => {
     if (activeFilter === 'trending') {
       return getPostEngagementScore(b) - getPostEngagementScore(a);
     }
-    const aConnected = isCreatorConnected(a.author.handle) ? 1 : 0;
-    const bConnected = isCreatorConnected(b.author.handle) ? 1 : 0;
+    const aConnected = isCreatorConnected(a.author?.handle || '@fan') ? 1 : 0;
+    const bConnected = isCreatorConnected(b.author?.handle || '@fan') ? 1 : 0;
     return bConnected - aConnected;
   });
 
@@ -486,9 +518,6 @@ export const HomeTab: React.FC = () => {
 
   return (
     <div className="pb-28 max-w-2xl mx-auto px-3 sm:px-4 pt-3 space-y-4">
-      {/* Daily Highlight Reel Story Bar */}
-      <DailyHighlightStoryBar />
-
       {/* Top Header Row */}
       <div className="flex items-center justify-between pt-1">
         <div>
@@ -910,14 +939,6 @@ export const HomeTab: React.FC = () => {
             )}
           </button>
         </div>
-
-        {/* Live Media Storage Calculator Summary Bar */}
-        <div className="pt-2 border-t border-slate-100 dark:border-white/5 flex items-center justify-between text-[11px] text-slate-500 dark:text-white/55">
-          <span className="font-semibold">Media Storage Calculator</span>
-          <span className="font-mono tabular-nums font-bold text-slate-700 dark:text-white/85">
-            🖼️ {mediaStorageStats?.totalImageMb ?? 0} MB ({mediaStorageStats?.imageCount ?? 0}) · 🎬 {mediaStorageStats?.totalVideoMb ?? 0} MB ({mediaStorageStats?.videoCount ?? 0})
-          </span>
-        </div>
       </div>
 
       {/* Posts Feed */}
@@ -948,17 +969,17 @@ export const HomeTab: React.FC = () => {
                 <div className="flex items-start justify-between gap-2">
                   <div
                     onClick={() => openCreatorProfile({
-                      handle: post.author.handle,
-                      name: post.author.name,
-                      avatar: post.author.avatar,
-                      clubBadge: post.author.clubBadge,
+                      handle: post.author?.handle || '@fan',
+                      name: post.author?.name || 'Supporter',
+                      avatar: post.author?.avatar || user.avatar,
+                      clubBadge: post.author?.clubBadge,
                     })}
                     className="flex items-center gap-2.5 cursor-pointer group min-w-0"
-                    title={`View all posts and videos by ${post.author.name}`}
+                    title={`View all posts and videos by ${post.author?.name || 'Supporter'}`}
                   >
                     <img
-                      src={post.author.avatar}
-                      alt={`${post.author.name} football fan profile avatar`}
+                      src={post.author?.avatar || user.avatar}
+                      alt={`${post.author?.name || 'Supporter'} football fan profile avatar`}
                       loading="lazy"
                       decoding="async"
                       className="w-10 h-10 rounded-full object-cover ring-2 ring-[#00E676]/30 group-hover:ring-[#00E676] transition-all shrink-0"
@@ -966,36 +987,36 @@ export const HomeTab: React.FC = () => {
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-extrabold text-xs sm:text-sm text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-[#00E676] transition-colors truncate">
-                          {post.author.name}
+                          {post.author?.name || 'Supporter'}
                         </span>
-                        {post.author.isVerified && (
+                        {post.author?.isVerified && (
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-[#00E676] fill-[#00E676]/20 shrink-0" />
                         )}
 
-                        {post.author.handle !== user.handle && (
+                        {(post.author?.handle || '@fan') !== user.handle && (
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              toggleConnectCreator(post.author.handle, {
-                                name: post.author.name,
-                                avatar: post.author.avatar,
-                                clubBadge: post.author.clubBadge,
+                              toggleConnectCreator(post.author?.handle || '@fan', {
+                                name: post.author?.name || 'Supporter',
+                                avatar: post.author?.avatar || user.avatar,
+                                clubBadge: post.author?.clubBadge,
                               });
                             }}
                             className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-all flex items-center gap-1 shrink-0 ${
-                              isCreatorConnected(post.author.handle)
+                              isCreatorConnected(post.author?.handle || '@fan')
                                 ? 'bg-emerald-500/10 text-emerald-700 dark:text-[#00E676] border border-emerald-500/30'
                                 : 'bg-[#00E676] text-black hover:bg-emerald-400'
                             }`}
                             title="Connect with creator to receive their posts first"
                           >
-                            {isCreatorConnected(post.author.handle) ? '✓ Priority Connected' : '+ Connect'}
+                            {isCreatorConnected(post.author?.handle || '@fan') ? '✓ Priority Connected' : '+ Connect'}
                           </button>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-white/55 flex-wrap">
-                        <span>{post.author.handle}</span>
+                        <span>{post.author?.handle || '@fan'}</span>
                         <span>·</span>
                         <span>{post.timestamp}</span>
                         {post.clubTag ? (
@@ -1012,7 +1033,7 @@ export const HomeTab: React.FC = () => {
                               ⚽ {post.clubTag}
                             </button>
                           </>
-                        ) : post.author.clubBadge ? (
+                        ) : post.author?.clubBadge ? (
                           <span>· {post.author.clubBadge}</span>
                         ) : null}
                         {post.isEdited && <span className="text-[10px] italic">(edited)</span>}
@@ -1114,7 +1135,7 @@ export const HomeTab: React.FC = () => {
                   >
                     <img
                       src={post.imageUrl || post.mediaUrl}
-                      alt={`football fan post photo by ${post.author.name}`}
+                      alt={`football fan post photo by ${post.author?.name || 'Supporter'}`}
                       loading="lazy"
                       decoding="async"
                       className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
@@ -1130,21 +1151,58 @@ export const HomeTab: React.FC = () => {
                   </div>
                 )}
 
-                {(post.videoUrl || (post.mediaType === 'video' && post.mediaUrl)) && (
-                  <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-100 dark:border-white/5">
-                    <video
-                      src={post.videoUrl || post.mediaUrl}
-                      controls
-                      playsInline
-                      className="w-full max-h-[340px]"
-                    />
-                    {post.mediaSizeMb ? (
-                      <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/75 text-[10px] font-mono tabular-nums font-bold text-blue-400 border border-blue-400/30">
-                        {post.mediaSizeMb} MB
-                      </span>
-                    ) : null}
-                  </div>
-                )}
+                {(post.videoUrl || (post.mediaType === 'video' && post.mediaUrl)) && (() => {
+                  const isVerticalShort = post.aspectRatio === '9:16' || post.videoKind === 'short';
+                  const videoSrc = post.videoUrl || post.mediaUrl || '';
+                  return (
+                    <div className="rounded-2xl overflow-hidden bg-slate-950 border border-slate-200/80 dark:border-white/10">
+                      <div
+                        className={`relative bg-black flex items-center justify-center ${
+                          isVerticalShort ? 'aspect-[9/16] max-h-[420px] mx-auto' : 'aspect-video w-full'
+                        }`}
+                      >
+                        <video
+                          src={videoSrc}
+                          poster={post.thumbnailUrl || undefined}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                      <div className="px-3 py-2 bg-slate-900/95 text-white flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-mono text-white/80 truncate tabular-nums">
+                          {isVerticalShort ? '9:16 Short' : '16:9 Video'}
+                          {post.durationSeconds ? ` · ${Math.floor(post.durationSeconds / 60)}:${(post.durationSeconds % 60).toString().padStart(2, '0')}` : ''}
+                          {post.mediaSizeMb ? ` · ${post.mediaSizeMb} MB` : ''}
+                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => openShareSheet({
+                              kind: 'post',
+                              targetId: post.id,
+                              title: `Match Clip by ${post.author?.name || 'Supporter'}`,
+                              text: post.content || 'Watch this football clip on FUTFIELD!',
+                              url: buildShareUrl('/highlights'),
+                              previewImage: post.thumbnailUrl,
+                            })}
+                            className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                          >
+                            Send to Phone
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('videos')}
+                            className="px-2.5 py-1 rounded-lg bg-[#00E676] hover:bg-[#00c864] text-black font-black transition-colors"
+                          >
+                            PitchReels
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Footer: Action Row */}
                 <div className="pt-2 border-t border-slate-100 dark:border-white/5 flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-white/75">
@@ -1189,23 +1247,6 @@ export const HomeTab: React.FC = () => {
                         <span>{post.shares || 0}</span>
                       </>
                     )}
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      haptics.like();
-                      sendGiftToCreator(post.author.handle, post.author.name, {
-                        id: 'ball',
-                        name: 'Match Ball',
-                        icon: '⚽',
-                        price: 1.00,
-                      }, post.id);
-                    }}
-                    className="min-h-[38px] flex items-center gap-1 py-1.5 px-2.5 rounded-xl text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-colors font-bold text-xs ml-auto"
-                    title="Send Match Ball ($1.00 tip)"
-                  >
-                    <Gift className="w-3.5 h-3.5" />
-                    <span>Tip $1</span>
                   </button>
                 </div>
 
@@ -1327,20 +1368,20 @@ export const HomeTab: React.FC = () => {
                             <div key={comment.id} className="space-y-1.5">
                               <div className="flex items-start gap-2">
                                 <img
-                                  src={comment.author.avatar || user.avatar}
-                                  alt={`${comment.author.name} football fan comment avatar`}
+                                  src={comment.author?.avatar || user.avatar}
+                                  alt={`${comment.author?.name || 'Supporter'} football fan comment avatar`}
                                   loading="lazy"
                                   decoding="async"
-                                  onClick={() => navigateToProfile(comment.author.handle || comment.author.name)}
+                                  onClick={() => navigateToProfile(comment.author?.handle || comment.author?.name || 'Supporter')}
                                   className="w-6 h-6 rounded-full object-cover shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
                                 />
                                 <div className="flex-1 bg-slate-50 dark:bg-white/5 p-2 rounded-xl text-xs space-y-0.5">
                                   <div className="flex items-center justify-between">
                                     <span
-                                      onClick={() => navigateToProfile(comment.author.handle || comment.author.name)}
+                                      onClick={() => navigateToProfile(comment.author?.handle || comment.author?.name || 'Supporter')}
                                       className="font-bold text-[11px] text-slate-900 dark:text-white cursor-pointer hover:underline"
                                     >
-                                      {comment.author.name}
+                                      {comment.author?.name || 'Supporter'}
                                     </span>
                                     <span className="text-[9px] text-slate-400">{comment.timestamp}</span>
                                   </div>
@@ -1357,7 +1398,7 @@ export const HomeTab: React.FC = () => {
                                     setReplyTarget({
                                       postId: post.id,
                                       parentId: comment.id,
-                                      authorName: comment.author.name,
+                                      authorName: comment.author?.name || 'Supporter',
                                     })
                                   }
                                   className="hover:text-[#00E676] font-semibold"
@@ -1375,7 +1416,7 @@ export const HomeTab: React.FC = () => {
                                       <div className="flex-1 bg-slate-100/70 dark:bg-white/10 p-2 rounded-xl text-[11px]">
                                         <div className="flex items-center justify-between">
                                           <span className="font-bold text-[10px] text-slate-900 dark:text-white">
-                                            {reply.author.name}
+                                            {reply.author?.name || 'Supporter'}
                                           </span>
                                           <span className="text-[9px] text-slate-400">{reply.timestamp}</span>
                                         </div>

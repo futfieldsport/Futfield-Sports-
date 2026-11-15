@@ -91,6 +91,12 @@ export interface Post {
   mediaType?: 'image' | 'video';
   imageUrl?: string;
   videoUrl?: string;
+  thumbnailUrl?: string;
+  videoKind?: 'short' | 'video';
+  aspectRatio?: '9:16' | '16:9';
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
   mediaSizeBytes?: number;
   mediaSizeMb?: number;
   location?: string;
@@ -119,9 +125,18 @@ export interface Post {
 export interface MatchEvent {
   id: string;
   minute: string;
-  type: 'goal' | 'yellow_card' | 'red_card' | 'substitution';
+  type:
+    | 'goal'
+    | 'own_goal'
+    | 'penalty_goal'
+    | 'missed_penalty'
+    | 'yellow_card'
+    | 'red_card'
+    | 'substitution'
+    | 'var';
   player: string;
   assist?: string;
+  detail?: string;
   team: 'home' | 'away';
 }
 
@@ -149,6 +164,7 @@ export interface LineupPlayer {
   name: string;
   position: string;
   isCaptain?: boolean;
+  rating?: number;
 }
 
 export interface Match {
@@ -251,6 +267,8 @@ export interface VideoItem {
   quality: string;
   videoKind?: 'short' | 'video';
   aspectRatio?: '9:16' | '16:9';
+  width?: number;
+  height?: number;
   copyrightStatus?: 'CLEAR' | 'WARNING' | 'BLOCKED';
   copyrightReport?: {
     status: 'CLEAR' | 'WARNING' | 'BLOCKED';

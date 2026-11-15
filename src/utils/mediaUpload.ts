@@ -190,6 +190,96 @@ export function inspectVideoMetadata(videoFile: File): Promise<VideoInspectionMe
   });
 }
 
+/**
+ * Capture a crisp JPEG poster frame from an uploaded Video File on an offscreen canvas.
+ * Prevents uploaded clips from showing blank players or generic stock banners.
+ */
+export function captureVideoPosterFrame(videoFile: File): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve(null);
+      return;
+    }
+    const video = document.createElement('video');
+    const objectUrl = URL.createObjectURL(videoFile);
+    let settled = false;
+
+    const finish = (blob: Blob | null) => {
+      if (settled) return;
+      settled = true;
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        URL.revokeObjectURL(objectUrl);
+      } catch {}
+      resolve(blob);
+    };
+
+    const timer = setTimeout(() => finish(null), 4000);
+
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = objectUrl;
+
+    video.onloadedmetadata = () => {
+      const targetTime =
+        Number.isFinite(video.duration) && video.duration > 0
+          ? Math.min(1.2, Math.max(0.15, video.duration * 0.2))
+          : 0.25;
+      try {
+        video.currentTime = targetTime;
+      } catch {
+        // Fallback if seek throws
+      }
+    };
+
+    const grabFrame = () => {
+      clearTimeout(timer);
+      const vw = video.videoWidth || 720;
+      const vh = video.videoHeight || 1280;
+      if (vw <= 0 || vh <= 0) {
+        finish(null);
+        return;
+      }
+      const maxDim = 720;
+      const scale = Math.min(1, maxDim / Math.max(vw, vh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(180, Math.round(vw * scale));
+      canvas.height = Math.max(180, Math.round(vh * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        finish(null);
+        return;
+      }
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => finish(blob),
+          'image/jpeg',
+          0.84
+        );
+      } catch {
+        finish(null);
+      }
+    };
+
+    video.onseeked = grabFrame;
+    video.onloadeddata = () => {
+      setTimeout(() => {
+        if (!settled && video.readyState >= 2) {
+          grabFrame();
+        }
+      }, 280);
+    };
+
+    video.onerror = () => {
+      clearTimeout(timer);
+      finish(null);
+    };
+  });
+}
+
 function inferMediaKind(bucket: StorageBucket, mimeType: string): 'image' | 'video' | 'audio' {
   const lowerMime = (mimeType || '').toLowerCase();
   if (lowerMime.startsWith('audio/') || bucket === 'match-chat-voices') return 'audio';

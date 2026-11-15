@@ -43,6 +43,8 @@ import {
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { TOP_10_LEAGUES } from '../../data/top10LeaguesPlayers';
+import { WORLD_COUNTRIES, getCountryFlag } from '../../data/worldCountries';
+import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
 import { haptics } from '../../utils/haptics';
 import { useHaptics } from '../../hooks/useHaptics';
 import { fetchCopyrightEngineStatus } from '../../services/supabaseClient';
@@ -229,6 +231,7 @@ export const SettingsPage: React.FC = () => {
       bio: editBio.trim(),
       favoriteClub: editClub.trim() || 'Not Set',
       favoriteCountry: editCountry.trim() || 'Global',
+      favoriteCountryFlag: getCountryFlag(editCountry.trim() || 'Global'),
     });
     setSaveAccountSuccess(true);
     setTimeout(() => setSaveAccountSuccess(false), 3000);
@@ -585,23 +588,46 @@ export const SettingsPage: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 dark:text-white/70">Favorite Club</label>
+                    <label className="text-xs font-bold text-slate-700 dark:text-white/70">
+                      Favorite Club ({POPULAR_TOP_5_CLUBS.length}+ Clubs)
+                    </label>
                     <input
                       type="text"
+                      list="futfield-all-clubs"
                       value={editClub}
                       onChange={e => setEditClub(e.target.value)}
-                      className="w-full bg-slate-100 dark:bg-black/50 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                      placeholder="Select or type any club..."
+                      className="w-full min-h-[42px] bg-slate-100 dark:bg-black/50 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                     />
+                    <datalist id="futfield-all-clubs">
+                      {POPULAR_TOP_5_CLUBS.map(club => (
+                        <option key={club.id} value={club.name}>
+                          {club.leagueName} ({club.country})
+                        </option>
+                      ))}
+                    </datalist>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 dark:text-white/70">Favorite Country</label>
-                    <input
-                      type="text"
+                    <label className="text-xs font-bold text-slate-700 dark:text-white/70">
+                      Favorite Country ({WORLD_COUNTRIES.length} Countries)
+                    </label>
+                    <select
                       value={editCountry}
                       onChange={e => setEditCountry(e.target.value)}
-                      className="w-full bg-slate-100 dark:bg-black/50 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
-                    />
+                      className="w-full min-h-[42px] bg-slate-100 dark:bg-black/50 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                    >
+                      {!WORLD_COUNTRIES.some(c => c.name === editCountry) && editCountry && (
+                        <option value={editCountry} className="dark:bg-[#12171F]">
+                          🌍 {editCountry}
+                        </option>
+                      )}
+                      {WORLD_COUNTRIES.map(c => (
+                        <option key={c.code + c.name} value={c.name} className="dark:bg-[#12171F]">
+                          {c.flag} {c.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 

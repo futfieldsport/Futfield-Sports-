@@ -1,6 +1,8 @@
+import PaystackPop from '@paystack/inline-js';
+
 /**
  * FUTFIELD Paystack Worldwide Subscription Gateway
- * Single payment processor settling worldwide international cards across 3 tiers.
+ * Single payment processor settling worldwide international cards, bank transfers, and USSD across 3 tiers.
  */
 
 export interface UserCountryData {
@@ -9,6 +11,8 @@ export interface UserCountryData {
   currency: string;
   city?: string;
 }
+
+export const PENDING_PAYSTACK_TX_KEY = 'futfield_pending_paystack_tx';
 
 let cachedCountry: UserCountryData | null = null;
 
@@ -37,7 +41,6 @@ export async function getUserCountry(): Promise<UserCountryData> {
     console.warn('[Paystack GeoIP Backend] IP lookup notice, defaulting to Nigeria (NG):', err);
   }
 
-  // Graceful fallback
   cachedCountry = {
     country_code: 'NG',
     country_name: 'Nigeria',
@@ -129,7 +132,7 @@ export const PRO_SUBSCRIPTION_PLANS: SubscriptionPricingPlan[] = [
       'Unlimited Posts, PitchReels & Match Chats for 90 Days',
       'FUTFIELD Verified Golden Checkmark on Profile & Takes',
       'Unlimited Custom Video Thumbnails in Creator Studio',
-      '20% Discount on Virtual Matchday Tipping Gifts',
+      'Priority Creator Studio Analytics & Live Match Alerts',
       '+2,000 Fan Points Instant Boost ($8.33/mo effective rate)',
     ],
   },
@@ -170,110 +173,162 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
   return { NGN: 1600, USD: 1 };
 }
 
-export async function checkPaystackKeyStatus(): Promise<{ active: boolean; message: string }> {
+export async function checkPaystackKeyStatus(): Promise<{
+  active: boolean;
+  configured?: boolean;
+  message: string;
+  hasPublicKey?: boolean;
+  publicKey?: string;
+  mode?: 'live' | 'test' | 'unconfigured';
+}> {
   try {
     const res = await fetch('/api/paystack/status');
+    if (!res.ok) {
+      return { active: false, message: 'Paystack status check unavailable.' };
+    }
     return await res.json();
   } catch {
-    return { active: true, message: 'Paystack gateway connected.' };
+    return { active: false, message: 'Unable to reach Paystack verification server.' };
   }
-}
-
-export async function loadPaystackScript(): Promise<boolean> {
-  if (typeof window === 'undefined') return false;
-  if ((window as any).PaystackPop) return true;
-
-  return new Promise((resolve) => {
-    const script = document.createElement('script');
-    script.src = 'https://js.paystack.co/v1/inline.js';
-    script.async = true;
-    script.onload = () => resolve(true);
-    script.onerror = () => {
-      console.warn('[Paystack] Inline popup script failed, falling back to secure redirect');
-      resolve(false);
-    };
-    document.body.appendChild(script);
-  });
 }
 
 export interface StartSubscriptionOptions {
   email: string;
   userId: string;
   country: string;
+  preferredCurrency?: 'NGN' | 'USD';
   planType: 'pro' | 'vip' | 'season';
-  onSuccess: (data: { reference: string; planType: string; expiresAt: string }) => void;
+  checkoutMode?: 'popup' | 'redirect';
+  onSuccess: (data: { reference: string; planType: string; expiresAt: string; bonusPoints?: number; currency?: string; amount?: number }) => void;
   onFailed?: (errorMsg: string) => void;
   onClose?: () => void;
 }
 
+function savePendingPaystackTx(payload: {
+  reference: string;
+  planType: string;
+  userId: string;
+  email: string;
+}) {
+  try {
+    localStorage.setItem(
+      PENDING_PAYSTACK_TX_KEY,
+      JSON.stringify({ ...payload, createdAt: Date.now() })
+    );
+  } catch {}
+}
+
+export function clearPendingPaystackTx() {
+  try {
+    localStorage.removeItem(PENDING_PAYSTACK_TX_KEY);
+  } catch {}
+}
+
 /**
- * Initializes and launches Paystack subscription checkout for the 3 tiers
+ * Initializes Paystack on the server and resumes the exact transaction via Paystack V2 Inline JS
+ * (`resumeTransaction(access_code)`), avoiding duplicate reference errors and falling back to hosted checkout if needed.
  */
 export async function startPaystackSubscription(options: StartSubscriptionOptions): Promise<void> {
-  const { email, userId, country, planType, onSuccess, onFailed, onClose } = options;
+  const {
+    email,
+    userId,
+    country,
+    preferredCurrency,
+    planType,
+    checkoutMode = 'popup',
+    onSuccess,
+    onFailed,
+    onClose,
+  } = options;
 
   try {
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      throw new Error('Please enter a valid billing email address for your Paystack receipt.');
+    }
+
     const initRes = await fetch('/api/paystack/initialize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email,
+        email: cleanEmail,
         user_id: userId,
         country,
+        preferred_currency: preferredCurrency,
         plan_type: planType,
         callback_url: `${window.location.origin}/payment/callback`,
       }),
     });
 
-    const initData = await initRes.json();
-    if (!initData.success) {
-      throw new Error(initData.error || 'Failed to initialize Paystack session');
+    const initData = await initRes.json().catch(() => ({}));
+    if (!initRes.ok || !initData.success) {
+      throw new Error(initData.error || 'Failed to initialize Paystack checkout session');
     }
 
-    const { reference, access_code, authorization_url, amount, currency } = initData;
-    const publicKey =
-      (import.meta as any).env?.VITE_PAYSTACK_PUBLIC_KEY ||
-      initData.publicKey ||
-      'pk_test_futfield_live_football_engine';
+    const { reference, access_code, authorization_url } = initData;
+    if (reference) {
+      savePendingPaystackTx({ reference, planType, userId, email: cleanEmail });
+    }
 
-    const scriptLoaded = await loadPaystackScript();
+    // Direct hosted checkout redirect when explicitly chosen or when access_code/public key unavailable
+    const publicKey = String(
+      (import.meta as any).env?.VITE_PAYSTACK_PUBLIC_KEY || initData.publicKey || ''
+    ).trim();
 
-    if (scriptLoaded && (window as any).PaystackPop) {
-      const handler = (window as any).PaystackPop.setup({
-        key: publicKey,
-        email,
-        amount,
-        currency,
-        ref: reference,
-        metadata: {
-          custom_fields: [
-            { display_name: 'App', variable_name: 'app', value: 'Futfield' },
-            { display_name: 'Plan', variable_name: 'plan_type', value: planType },
-            { display_name: 'Country', variable_name: 'country', value: country },
-            { display_name: 'Gateway', variable_name: 'gateway', value: 'Paystack' },
-          ],
-        },
-        callback: function (response: any) {
-          const verifiedRef = response?.reference || reference;
-          verifyAndActivatePro(verifiedRef, planType, userId, onSuccess, onFailed).catch((err) => {
-            if (onFailed) onFailed(err?.message || 'Payment verification failed');
-          });
-        },
-        onClose: function () {
-          if (onClose) onClose();
-        },
-      });
+    if (checkoutMode === 'popup' && access_code && publicKey.startsWith('pk_')) {
+      try {
+        const popup = new PaystackPop();
+        let finished = false;
+        let fallbackTriggered = false;
 
-      handler.openIframe();
+        // Safety timeout: if Paystack iframe is blocked or fails to load, redirect cleanly to hosted checkout
+        const loadFallbackTimer = window.setTimeout(() => {
+          if (!finished && !fallbackTriggered && authorization_url) {
+            fallbackTriggered = true;
+            window.location.assign(authorization_url);
+          }
+        }, 12000);
+
+        popup.resumeTransaction(access_code, {
+          onLoad: () => {
+            window.clearTimeout(loadFallbackTimer);
+          },
+          onSuccess: (transaction: any) => {
+            finished = true;
+            window.clearTimeout(loadFallbackTimer);
+            const verifiedRef = transaction?.reference || reference;
+            verifyAndActivatePro(verifiedRef, planType, userId, onSuccess, onFailed).catch((err) => {
+              if (onFailed) onFailed(err?.message || 'Payment verification failed');
+            });
+          },
+          onCancel: () => {
+            finished = true;
+            window.clearTimeout(loadFallbackTimer);
+            if (onClose) onClose();
+          },
+          onError: (err: any) => {
+            window.clearTimeout(loadFallbackTimer);
+            console.warn('[Paystack Inline Popup Error, falling back to hosted checkout]:', err?.message || err);
+            if (!finished && !fallbackTriggered && authorization_url) {
+              fallbackTriggered = true;
+              window.location.assign(authorization_url);
+            } else if (onFailed) {
+              onFailed(err?.message || 'Unable to load Paystack checkout popup.');
+            }
+          },
+        });
+        return;
+      } catch (popupErr: any) {
+        console.warn('[Paystack Inline Init Fallback]:', popupErr?.message);
+      }
+    }
+
+    if (authorization_url && !String(authorization_url).includes('undefined')) {
+      window.location.assign(authorization_url);
       return;
     }
 
-    if (authorization_url && !authorization_url.includes('undefined')) {
-      window.location.href = authorization_url;
-      return;
-    }
-
-    await verifyAndActivatePro(reference, planType, userId, onSuccess, onFailed);
+    throw new Error('Paystack checkout session could not be opened. Check server payment configuration.');
   } catch (err: any) {
     console.error('[Paystack Subscription Error]:', err);
     if (onFailed) onFailed(err.message || 'Payment initialization failed. Please try again.');
@@ -281,42 +336,55 @@ export async function startPaystackSubscription(options: StartSubscriptionOption
 }
 
 /**
- * Verify Paystack transaction on the backend
+ * Verify Paystack transaction on the backend and trigger Pro activation
  */
 export async function verifyAndActivatePro(
   reference: string,
   planType: string,
   userId: string,
-  onSuccess: (data: { reference: string; planType: string; expiresAt: string }) => void,
+  onSuccess: (data: {
+    reference: string;
+    planType: string;
+    expiresAt: string;
+    bonusPoints?: number;
+    currency?: string;
+    amount?: number;
+  }) => void,
   onFailed?: (errorMsg: string) => void
 ): Promise<boolean> {
   try {
-    const res = await fetch(`/api/paystack/verify/${encodeURIComponent(reference)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reference, plan_type: planType, user_id: userId }),
-    });
-
-    const data = await res.json();
-    if (data.success) {
-      onSuccess({
-        reference: data.reference || reference,
-        planType: data.data?.plan_type || planType,
-        expiresAt: data.data?.expires_at || new Date(Date.now() + 30 * 86400000).toISOString(),
-      });
-      return true;
-    } else {
-      if (onFailed) onFailed(data.error || 'Payment verification failed');
+    const cleanRef = String(reference || '').trim();
+    if (!cleanRef) {
+      if (onFailed) onFailed('Please provide a valid Paystack transaction reference.');
       return false;
     }
-  } catch (err: any) {
-    console.warn('[Paystack Verification]:', err);
-    onSuccess({
-      reference,
-      planType,
-      expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+
+    const res = await fetch(`/api/paystack/verify/${encodeURIComponent(cleanRef)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference: cleanRef, plan_type: planType, user_id: userId }),
     });
-    return true;
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      clearPendingPaystackTx();
+      onSuccess({
+        reference: data.reference || cleanRef,
+        planType: data.data?.plan_type || planType,
+        expiresAt: data.data?.expires_at || new Date(Date.now() + 30 * 86400000).toISOString(),
+        bonusPoints: typeof data.data?.bonus_points === 'number' ? data.data.bonus_points : undefined,
+        currency: data.data?.currency,
+        amount: data.data?.amount,
+      });
+      return true;
+    }
+
+    if (onFailed) onFailed(data.error || 'Paystack transaction could not be verified.');
+    return false;
+  } catch (err: any) {
+    console.error('[Paystack Verification Error]:', err);
+    if (onFailed) onFailed(err?.message || 'Network error while verifying Paystack payment.');
+    return false;
   }
 }
 
@@ -338,11 +406,18 @@ export async function cancelProSubscription(
         email,
       }),
     });
-    return await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        success: false,
+        message: data?.error || data?.message || 'Unable to cancel subscription right now.',
+      };
+    }
+    return data;
   } catch (err: any) {
     return {
-      success: true,
-      message: 'Subscription has been marked for cancellation at period end.',
+      success: false,
+      message: err?.message || 'Network error cancelling subscription.',
     };
   }
 }

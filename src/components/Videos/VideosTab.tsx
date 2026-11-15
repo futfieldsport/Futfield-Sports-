@@ -25,27 +25,26 @@ import {
   Image as ImageIcon,
   Music,
   CornerDownRight,
-  Gift,
   Flame,
-  BarChart3,
   Repeat,
   PictureInPicture2,
   Eye,
   Gauge,
-  HardDrive,
+  Film,
   Sparkles,
   SkipForward,
   Trophy,
   ShieldCheck,
   ShieldAlert,
-  Film,
   Clapperboard,
+  RefreshCw,
+  Minimize2,
+  Smartphone,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { VideoItem } from '../../types/football';
 import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
 import { VideoCommentsDrawer } from './VideoCommentsDrawer';
-import { DailyHighlightStoryBar } from './DailyHighlightReel';
 import {
   likeVideoOnServer,
   recordVideoViewOnServer,
@@ -55,7 +54,13 @@ import {
 } from '../../services/supabaseClient';
 import { haptics } from '../../utils/haptics';
 import { useHaptics } from '../../hooks/useHaptics';
-import { uploadFileToBackend, inspectVideoMetadata, formatBytesToMb } from '../../utils/mediaUpload';
+import {
+  uploadFileToBackend,
+  inspectVideoMetadata,
+  formatBytesToMb,
+  captureVideoPosterFrame,
+} from '../../utils/mediaUpload';
+import { buildShareUrl } from '../../utils/share';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
 
 export const VideosTab: React.FC = () => {
@@ -76,13 +81,13 @@ export const VideosTab: React.FC = () => {
     isCreatorConnected,
     toggleConnectCreator,
     openCreatorProfile,
-    sendGiftToCreator,
     reactToVideo,
     shareVideo,
-    realtimeAnalytics,
-    mediaStorageStats,
     refreshMediaAndAnalytics,
     dataSavingMode,
+    latestUploadedVideoId,
+    setLatestUploadedVideoId,
+    openShareSheet,
   } = useFootball();
 
   const { triggerMessage, triggerWarning, triggerSuccess } = useHaptics();
@@ -95,7 +100,6 @@ export const VideosTab: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClubFilter, setSelectedClubFilter] = useState<string>('all');
   const [selectedHashtag, setSelectedHashtag] = useState<string>('All');
-  const [showAnalyticsModal, setShowAnalyticsModal] = useState<boolean>(false);
 
   // Dedicated Video Page state (YouTube style)
   const [dedicatedVideo, setDedicatedVideo] = useState<VideoItem | null>(null);
@@ -113,6 +117,11 @@ export const VideosTab: React.FC = () => {
   const [heartBurst, setHeartBurst] = useState<boolean>(false);
   const [reactionBurstEmoji, setReactionBurstEmoji] = useState<string | null>(null);
   const [dislikedVideos, setDislikedVideos] = useState<Record<string, boolean>>({});
+  const [fitMode, setFitMode] = useState<'contain' | 'cover'>('contain');
+  const [reelProgress, setReelProgress] = useState<number>(0);
+  const [reelDuration, setReelDuration] = useState<number>(0);
+  const [videoBuffering, setVideoBuffering] = useState<boolean>(false);
+  const [videoError, setVideoError] = useState<boolean>(false);
 
   // Backend Video Upload Modal state + Sign Splash
   const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
@@ -133,6 +142,8 @@ export const VideosTab: React.FC = () => {
   const [uploadFileSizeMb, setUploadFileSizeMb] = useState<number>(0);
   const [uploadDurationSec, setUploadDurationSec] = useState<number>(30);
   const [uploadResolution, setUploadResolution] = useState<string>('');
+  const [uploadWidth, setUploadWidth] = useState<number>(0);
+  const [uploadHeight, setUploadHeight] = useState<number>(0);
   const [uploadIsVertical, setUploadIsVertical] = useState<boolean>(true);
   const [uploadVideoKind, setUploadVideoKind] = useState<'short' | 'video'>('short');
   const [uploadAspectRatio, setUploadAspectRatio] = useState<'9:16' | '16:9'>('9:16');
@@ -174,17 +185,19 @@ export const VideosTab: React.FC = () => {
 
   // Filter videos by active section (9:16 Shorts vs 16:9 Videos), search, club tag, and trending hashtag
   const baseFilteredVideos = videos.filter(v => {
+    if (!v) return false;
     const matchesSection = getVideoSectionKind(v) === activeVideoSection;
+    const qLower = searchQuery.toLowerCase();
     const matchesSearch =
-      v.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (v.hashtags && v.hashtags.some(h => h.toLowerCase().includes(searchQuery.toLowerCase())));
+      (v.title || '').toLowerCase().includes(qLower) ||
+      (v.description || '').toLowerCase().includes(qLower) ||
+      (v.hashtags && v.hashtags.some(h => h.toLowerCase().includes(qLower)));
     const matchesClub = selectedClubFilter === 'all' || v.clubTag === selectedClubFilter;
     const matchesTag =
       selectedHashtag === 'All' ||
       v.hashtags?.some(h => h.toLowerCase() === selectedHashtag.toLowerCase()) ||
-      v.title.toLowerCase().includes(selectedHashtag.replace('#', '').toLowerCase()) ||
-      v.description.toLowerCase().includes(selectedHashtag.replace('#', '').toLowerCase());
+      (v.title || '').toLowerCase().includes(selectedHashtag.replace('#', '').toLowerCase()) ||
+      (v.description || '').toLowerCase().includes(selectedHashtag.replace('#', '').toLowerCase());
     return matchesSection && matchesSearch && matchesClub && matchesTag;
   });
 
@@ -213,14 +226,36 @@ export const VideosTab: React.FC = () => {
     }
   }, [isPlaying, playbackRate, isLooping, currentVideo?.id, viewMode]);
 
-  // Reset play state when switching reels (paused automatically when Low-Data Mode is active)
+  // Reset play state & player progress when switching reels
   useEffect(() => {
     setIsPlaying(!dataSavingMode);
-  }, [currentVideo?.id, dataSavingMode]);
+    setReelProgress(0);
+    setReelDuration(currentVideo?.durationSeconds || 0);
+    setVideoBuffering(false);
+    setVideoError(false);
+    setFitMode('contain');
+  }, [currentVideo?.id, dataSavingMode, activeVideoSection]);
+
+  // Automatically clear filters and jump to a freshly uploaded video when targeted
+  useEffect(() => {
+    if (!latestUploadedVideoId) return;
+    const found = videos.find(v => v && v.id === latestUploadedVideoId);
+    if (!found) return;
+    const targetKind = getVideoSectionKind(found);
+    setSearchQuery('');
+    setSelectedClubFilter('all');
+    setSelectedHashtag('All');
+    setActiveVideoSection(targetKind);
+    setViewMode('foryou');
+    const sectionList = videos.filter(v => v && getVideoSectionKind(v) === targetKind);
+    const targetIdx = sectionList.findIndex(v => v.id === found.id);
+    setActiveVideoIndex(targetIdx >= 0 ? targetIdx : 0);
+    setDedicatedVideo(null);
+  }, [latestUploadedVideoId, videos]);
 
   // Keyboard navigation (Up/Down arrows & Space play/pause) on desktop
   useEffect(() => {
-    if (viewMode !== 'foryou' || showUploadModal || showAnalyticsModal || dedicatedVideo) return;
+    if (viewMode !== 'foryou' || showUploadModal || dedicatedVideo) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) return;
@@ -237,7 +272,7 @@ export const VideosTab: React.FC = () => {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [viewMode, activeVideoIndex, filteredVideos.length, showUploadModal, showAnalyticsModal, dedicatedVideo]);
+  }, [viewMode, activeVideoIndex, filteredVideos.length, showUploadModal, dedicatedVideo]);
 
   // Track video view after 2 seconds of watching (real-time backend counter)
   useEffect(() => {
@@ -256,10 +291,6 @@ export const VideosTab: React.FC = () => {
         setShowUploadModal(false);
         return true;
       }
-      if (showAnalyticsModal) {
-        setShowAnalyticsModal(false);
-        return true;
-      }
       if (dedicatedVideo) {
         setDedicatedVideo(null);
         return true;
@@ -271,7 +302,7 @@ export const VideosTab: React.FC = () => {
       return false;
     });
     return () => registerBackHandler(null);
-  }, [registerBackHandler, showUploadModal, showAnalyticsModal, dedicatedVideo, viewMode]);
+  }, [registerBackHandler, showUploadModal, dedicatedVideo, viewMode]);
 
   // Load comments when entering dedicated video page
   useEffect(() => {
@@ -384,28 +415,18 @@ export const VideosTab: React.FC = () => {
     } catch {}
   };
 
-  // Real-time Share action wired to server counter
-  const handleShareReel = async (vid: VideoItem) => {
+  // Real-time Share action wired to Phone Share Sheet & server counter
+  const handleShareReel = (vid: VideoItem) => {
     haptics.light();
     shareVideo(vid.id);
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: vid.title,
-          text: `${vid.title} — Watch on FUTFIELD PitchReels`,
-          url: window.location.href,
-        });
-      } else {
-        navigator.clipboard?.writeText(window.location.href);
-      }
-    } catch {
-      navigator.clipboard?.writeText(window.location.href);
-    }
     addFanPoints(5, 'Shared PitchReel');
-    addNotification({
-      title: 'Reel Shared! 🔗',
-      body: `Share link copied & live count updated (${(vid.shares || 0) + 1} shares).`,
-      type: 'system',
+    openShareSheet({
+      kind: 'video',
+      targetId: vid.id,
+      title: vid.title,
+      text: `${vid.title} — Watch on FUTFIELD PitchReels`,
+      url: buildShareUrl('/highlights'),
+      previewImage: vid.thumbnailUrl,
     });
   };
 
@@ -421,8 +442,8 @@ export const VideosTab: React.FC = () => {
   // Open Upload modal pre-filled as a Remix / Reply Clip
   const handleRemixClip = (vid: VideoItem) => {
     haptics.light();
-    setUploadTitle(`Remix: ${vid.title}`.slice(0, 100));
-    setUploadDesc(`Replying to ${vid.creator.handle} #Remix #PitchReels ${vid.clubTag ? `#${vid.clubTag.replace(/\s+/g, '')}` : ''}`);
+    setUploadTitle(`Remix: ${vid.title || 'Highlight'}`.slice(0, 100));
+    setUploadDesc(`Replying to ${vid.creator?.handle || '@creator'} #Remix #PitchReels ${vid.clubTag ? `#${vid.clubTag.replace(/\s+/g, '')}` : ''}`);
     setUploadClubTag(vid.clubTag || '');
     setUploadStep(1);
     setShowUploadModal(true);
@@ -446,6 +467,8 @@ export const VideosTab: React.FC = () => {
     // 1. Inspect metadata & auto-detect 9:16 Short (<=120s) vs 16:9 Video (<=180s)
     const meta = await inspectVideoMetadata(file);
     if (meta.duration > 0) setUploadDurationSec(meta.duration);
+    setUploadWidth(meta.width || 0);
+    setUploadHeight(meta.height || 0);
     if (meta.width > 0 && meta.height > 0) {
       setUploadResolution(`${meta.width}x${meta.height}`);
     } else {
@@ -467,6 +490,9 @@ export const VideosTab: React.FC = () => {
     setUploadVideoKind(detectedKind);
     setUploadAspectRatio(detectedRatio);
     setUploadIsVertical(detectedKind === 'short');
+
+    // Capture a real poster frame in parallel so every uploaded video displays crisp artwork immediately
+    const posterPromise = captureVideoPosterFrame(file).catch(() => null);
 
     // 2. Upload binary with detected dimensions/duration + run Backend MediaGuard Copyright Detector
     const res = await uploadFileToBackend(
@@ -498,6 +524,19 @@ export const VideosTab: React.FC = () => {
       setVideoUploadStatus('uploaded');
       triggerSuccess();
       refreshMediaAndAnalytics().catch(() => {});
+
+      const posterBlob = await posterPromise;
+      if (posterBlob) {
+        setThumbUploadStatus('uploading');
+        const posterFile = new File([posterBlob], `poster-${Date.now()}.jpg`, { type: 'image/jpeg' });
+        const posterRes = await uploadFileToBackend(posterFile, 'video-thumbnails', posterFile.name, undefined, user.id);
+        if (posterRes.success && posterRes.url) {
+          setUploadThumbnail(prev => prev || posterRes.url || '');
+          setThumbUploadStatus('uploaded');
+        } else {
+          setThumbUploadStatus('idle');
+        }
+      }
     } else {
       triggerWarning();
       setUploadCopyrightStatus(res.copyrightStatus || null);
@@ -562,7 +601,7 @@ export const VideosTab: React.FC = () => {
       const durSec = uploadDurationSec || 30;
       const durStr = `${Math.floor(durSec / 60)}:${(durSec % 60).toString().padStart(2, '0')}`;
 
-      await addVideo({
+      const created = await addVideo({
         title: uploadTitle.trim(),
         description: uploadDesc.trim(),
         videoUrl: uploadBackendUrl,
@@ -574,6 +613,8 @@ export const VideosTab: React.FC = () => {
         durationSeconds: durSec,
         sizeBytes: uploadFileSizeBytes,
         sizeMb: uploadFileSizeMb,
+        width: uploadWidth || undefined,
+        height: uploadHeight || undefined,
         videoKind: uploadVideoKind,
         aspectRatio: uploadAspectRatio,
         copyrightStatus: uploadCopyrightStatus || 'CLEAR',
@@ -582,9 +623,13 @@ export const VideosTab: React.FC = () => {
 
       triggerSuccess();
       refreshMediaAndAnalytics().catch(() => {});
+      setSearchQuery('');
+      setSelectedClubFilter('all');
+      setSelectedHashtag('All');
       setActiveVideoSection(uploadVideoKind);
       setViewMode('foryou');
       setActiveVideoIndex(0);
+      if (created?.id) setLatestUploadedVideoId(created.id);
       addNotification({
         title: `${uploadVideoKind === 'short' ? '9:16 Short' : '16:9 Video'} Published Live!`,
         body: `"${uploadTitle}" (${uploadFileSizeMb} MB) cleared MediaGuard & is streaming now.`,
@@ -604,6 +649,8 @@ export const VideosTab: React.FC = () => {
       setUploadProgress(0);
       setUploadFileSizeBytes(0);
       setUploadFileSizeMb(0);
+      setUploadWidth(0);
+      setUploadHeight(0);
       setUploadCopyrightStatus(null);
       setUploadCopyrightReport(null);
     } catch {
@@ -712,10 +759,18 @@ export const VideosTab: React.FC = () => {
         </div>
 
         {/* Video Player Box with Controls */}
-        <div className="relative rounded-2xl overflow-hidden bg-black aspect-video shadow-2xl group">
+        <div
+          className={`relative rounded-2xl overflow-hidden bg-black shadow-2xl group ${
+            getVideoSectionKind(liveDedicatedVideo) === 'short'
+              ? 'aspect-[9/16] max-h-[68vh] max-w-[340px] mx-auto'
+              : 'aspect-video w-full'
+          }`}
+        >
           <video
+            key={liveDedicatedVideo.id}
             ref={dedicatedVideoRef}
             src={liveDedicatedVideo.videoUrl}
+            poster={liveDedicatedVideo.thumbnailUrl || undefined}
             playsInline
             autoPlay={!dataSavingMode}
             preload={dataSavingMode ? 'metadata' : 'auto'}
@@ -813,13 +868,13 @@ export const VideosTab: React.FC = () => {
         {/* Channel Row */}
         <div className="flex items-center justify-between p-3 rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200/80 dark:border-white/10 shadow-sm">
           <div
-            onClick={() => navigateToProfile(liveDedicatedVideo.userId || liveDedicatedVideo.creator.handle)}
+            onClick={() => navigateToProfile(liveDedicatedVideo.userId || liveDedicatedVideo.creator?.handle || '@creator')}
             className="flex items-center gap-2.5 cursor-pointer group"
-            title={`View ${liveDedicatedVideo.creator.name}'s profile`}
+            title={`View ${liveDedicatedVideo.creator?.name || 'Pitch Creator'}'s profile`}
           >
             <img
-              src={liveDedicatedVideo.creator.avatar}
-              alt={`${liveDedicatedVideo.creator.name} football creator`}
+              src={liveDedicatedVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+              alt={`${liveDedicatedVideo.creator?.name || 'Pitch Creator'} football creator`}
               loading="lazy"
               decoding="async"
               className="w-10 h-10 rounded-full object-cover ring-2 ring-[#00E676]/30 group-hover:ring-[#00E676] transition-all"
@@ -827,25 +882,25 @@ export const VideosTab: React.FC = () => {
             <div>
               <div className="flex items-center gap-1">
                 <span className="font-extrabold text-xs text-slate-900 dark:text-white group-hover:text-[#00E676] transition-colors">
-                  {liveDedicatedVideo.creator.name}
+                  {liveDedicatedVideo.creator?.name || 'Pitch Creator'}
                 </span>
                 <CheckCircle2 className="w-3.5 h-3.5 text-[#00E676] fill-[#00E676]/20" />
               </div>
               <span className="text-[10px] text-slate-500 dark:text-white/50">
-                {liveDedicatedVideo.creator.subscribers}
+                {liveDedicatedVideo.creator?.subscribers || '1 supporter'}
               </span>
             </div>
           </div>
 
           <button
-            onClick={() => handleFollowCreator(liveDedicatedVideo.creator.handle)}
+            onClick={() => handleFollowCreator(liveDedicatedVideo.creator?.handle || '@creator')}
             className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${
-              liveDedicatedVideo.creator.isSubscribed
+              liveDedicatedVideo.creator?.isSubscribed
                 ? 'bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-white'
                 : 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-600/20 active:scale-95'
             }`}
           >
-            {liveDedicatedVideo.creator.isSubscribed ? 'Following' : 'Follow'}
+            {liveDedicatedVideo.creator?.isSubscribed ? 'Following' : 'Follow'}
           </button>
         </div>
 
@@ -971,7 +1026,7 @@ export const VideosTab: React.FC = () => {
             {liveDedicatedVideo.description || 'No description provided.'}
           </p>
           <div className="flex flex-wrap gap-1.5 pt-1">
-            {liveDedicatedVideo.hashtags.map((h, i) => (
+            {(liveDedicatedVideo.hashtags || []).map((h, i) => (
               <span
                 key={i}
                 onClick={() => setSearchQuery(h.replace('#', ''))}
@@ -1031,11 +1086,11 @@ export const VideosTab: React.FC = () => {
               pageComments.map(c => (
                 <div key={c.id} className="space-y-1.5 text-xs">
                   <div className="flex items-start gap-2">
-                    <img src={c.author.avatar || user.avatar} alt={`${c.author.name} football fan avatar`} loading="lazy" decoding="async" className="w-6 h-6 rounded-full object-cover shrink-0" />
+                    <img src={c.author?.avatar || user.avatar} alt={`${c.author?.name || 'Supporter'} football fan avatar`} loading="lazy" decoding="async" className="w-6 h-6 rounded-full object-cover shrink-0" />
                     <div className="flex-1 bg-slate-50 dark:bg-white/5 p-2 rounded-xl space-y-0.5">
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-[10px] text-slate-900 dark:text-white">
-                          {c.author.name}
+                          {c.author?.name || 'Supporter'}
                         </span>
                         <span className="text-[9px] text-slate-400">{c.timestamp}</span>
                       </div>
@@ -1047,7 +1102,7 @@ export const VideosTab: React.FC = () => {
                   <div className="pl-8 flex items-center gap-3 text-[10px] text-slate-400">
                     <button
                       onClick={() =>
-                        setPageReplyTarget({ parentId: c.id, authorName: c.author.name })
+                        setPageReplyTarget({ parentId: c.id, authorName: c.author?.name || 'Supporter' })
                       }
                       className="hover:text-[#00E676] font-semibold"
                     >
@@ -1063,7 +1118,7 @@ export const VideosTab: React.FC = () => {
                           <CornerDownRight className="w-3 h-3 text-slate-400 shrink-0 mt-1" />
                           <div className="flex-1 bg-slate-100/70 dark:bg-white/10 p-2 rounded-xl">
                             <span className="font-bold text-[10px] text-slate-900 dark:text-white block">
-                              {r.author.name}
+                              {r.author?.name || 'Supporter'}
                             </span>
                             <p className="text-[11px] text-slate-700 dark:text-white/80">{r.text}</p>
                           </div>
@@ -1110,9 +1165,9 @@ export const VideosTab: React.FC = () => {
                     {item.title}
                   </h4>
                   <span className="text-[10px] text-slate-500 dark:text-white/50 block truncate">
-                    {item.creator.name}
+                    {item.creator?.name || 'Pitch Creator'}
                   </span>
-                  <span className="text-[10px] text-slate-400">{item.views} views</span>
+                  <span className="text-[10px] text-slate-400">{item.views || 0} views</span>
                 </div>
               </div>
             ))}
@@ -1127,24 +1182,12 @@ export const VideosTab: React.FC = () => {
   // -------------------------------------------------------------
   return (
     <div className="pb-28 max-w-2xl mx-auto px-3 sm:px-4 pt-3 space-y-3.5 relative">
-      {/* Top Header Row with Analytics Button, Mode Switcher & Upload */}
+      {/* Top Header Row with Mode Switcher & Upload */}
       <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
         <div className="flex items-center gap-2">
           <h1 className="font-display text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">
             PitchReels · Football Highlights
           </h1>
-          <button
-            onClick={() => {
-              haptics.light();
-              refreshMediaAndAnalytics().catch(() => {});
-              setShowAnalyticsModal(true);
-            }}
-            className="min-h-[34px] px-2.5 py-1 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-700 dark:text-[#00E676] text-[10px] font-bold flex items-center gap-1 transition-all tabular-nums"
-            title="View Real-Time Views, Likes, Reactions, Shares & Media MB Calculator"
-          >
-            <BarChart3 className="w-3 h-3" />
-            <span>{mediaStorageStats?.totalVideoMb ?? 0} MB</span>
-          </button>
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -1244,9 +1287,6 @@ export const VideosTab: React.FC = () => {
         </button>
       </div>
 
-      {/* Daily Highlight Reel Story Bar */}
-      <DailyHighlightStoryBar />
-
       {/* Trending Hashtags Strip */}
       <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
         {TRENDING_TAGS.map(tag => (
@@ -1336,343 +1376,606 @@ export const VideosTab: React.FC = () => {
             </div>
           ) : (
             currentVideo && (
-              <div
-                onTouchStart={handleTouchStart}
-                onTouchEnd={handleTouchEnd}
-                onDoubleClick={() => handleDoubleTap(currentVideo.id)}
-                className={`relative w-full ${
-                  activeVideoSection === 'video'
-                    ? 'aspect-video'
-                    : 'aspect-[9/16] max-h-[68vh]'
-                } rounded-3xl overflow-hidden bg-black shadow-2xl border border-white/10 select-none group`}
-              >
-                {/* Background Video Auto-Playing (supports Auto-Next when Loop is off) */}
-                <video
-                  ref={videoRef}
-                  src={currentVideo.videoUrl}
-                  autoPlay
-                  loop={isLooping && !autoAdvanceReels}
-                  muted={isMuted}
-                  playsInline
-                  onEnded={() => {
-                    if (autoAdvanceReels && activeVideoIndex < filteredVideos.length - 1) {
-                      setActiveVideoIndex(activeVideoIndex + 1);
-                    }
-                  }}
-                  onClick={() => setIsPlaying(!isPlaying)}
-                  className="w-full h-full object-cover cursor-pointer"
-                />
-
-                {/* Paused Play Indicator */}
-                {!isPlaying && (
-                  <div
-                    onClick={() => setIsPlaying(true)}
-                    className="absolute inset-0 flex items-center justify-center bg-black/25 cursor-pointer z-20"
-                  >
-                    <div className="w-16 h-16 rounded-full bg-black/70 border border-white/20 flex items-center justify-center text-white backdrop-blur-md">
-                      <Play className="w-7 h-7 fill-white ml-0.5" />
+              <div className="space-y-3">
+                {/* Just Uploaded Live Showcase Bar */}
+                {latestUploadedVideoId === currentVideo.id && (
+                  <div className="p-3 rounded-2xl bg-gradient-to-r from-[#00E676]/15 via-emerald-500/10 to-blue-500/10 border border-[#00E676]/40 flex items-center justify-between gap-2 animate-in fade-in">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-emerald-700 dark:text-[#00E676]">
+                        <span className="w-2 h-2 rounded-full bg-[#00E676] animate-pulse" />
+                        <span>Just Uploaded · Streaming Live</span>
+                      </div>
+                      <p className="text-xs font-bold text-slate-900 dark:text-white truncate mt-0.5">
+                        {currentVideo.title} · {activeVideoSection === 'video' ? '16:9 HD' : '9:16 Short'}
+                      </p>
                     </div>
-                  </div>
-                )}
-
-                {/* Heart or Emoji Burst Animation */}
-                {(heartBurst || reactionBurstEmoji) && (
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-                    {reactionBurstEmoji ? (
-                      <span className="text-6xl animate-ping duration-700">{reactionBurstEmoji}</span>
-                    ) : (
-                      <Heart className="w-20 h-20 text-rose-500 fill-rose-500 animate-ping duration-700" />
-                    )}
-                  </div>
-                )}
-
-                {/* Top Overlay: Sound, Speed, Auto-Next, Loop, PiP, MB Size & Reel Counter */}
-                <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-20 pointer-events-auto">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => setIsMuted(!isMuted)}
-                      className="p-2 rounded-full bg-black/60 text-white backdrop-blur-md hover:bg-black"
-                      title={isMuted ? 'Unmute sound' : 'Mute sound'}
-                    >
-                      {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-[#00E676]" />}
-                    </button>
-                    <button
-                      onClick={cyclePlaybackRate}
-                      className="px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-mono font-bold backdrop-blur-md hover:bg-black flex items-center gap-0.5"
-                      title="Playback Speed"
-                    >
-                      <Gauge className="w-3 h-3 text-[#00E676]" />
-                      <span>{playbackRate}x</span>
-                    </button>
-                    <button
-                      onClick={() => setAutoAdvanceReels(!autoAdvanceReels)}
-                      className={`px-2 py-1 rounded-full backdrop-blur-md transition-colors text-[10px] font-bold flex items-center gap-0.5 ${
-                        autoAdvanceReels ? 'bg-[#00E676]/25 text-[#00E676]' : 'bg-black/60 text-white/60'
-                      }`}
-                      title={autoAdvanceReels ? 'Auto-Next Reel ON' : 'Auto-Next Reel OFF'}
-                    >
-                      <SkipForward className="w-3 h-3" />
-                      <span>Auto</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setIsLooping(!isLooping);
-                        if (!isLooping) setAutoAdvanceReels(false);
-                      }}
-                      className={`p-1.5 rounded-full backdrop-blur-md transition-colors ${
-                        isLooping && !autoAdvanceReels ? 'bg-[#00E676]/25 text-[#00E676]' : 'bg-black/60 text-white/60'
-                      }`}
-                      title={isLooping && !autoAdvanceReels ? 'Loop ON' : 'Loop OFF'}
-                    >
-                      <Repeat className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handlePictureInPicture(videoRef.current)}
-                      className="p-1.5 rounded-full bg-black/60 text-white backdrop-blur-md hover:bg-black"
-                      title="Picture-in-Picture"
-                    >
-                      <PictureInPicture2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    {currentVideo.sizeMb ? (
-                      <span className="px-2 py-1 rounded-full bg-black/70 text-[10px] font-mono font-bold text-[#00E676] backdrop-blur-md">
-                        {currentVideo.sizeMb} MB
-                      </span>
-                    ) : null}
-                    <span className="px-2 py-1 rounded-full bg-black/60 text-[10px] font-bold text-white/90 backdrop-blur-md flex items-center gap-1">
-                      <Eye className="w-3 h-3 text-[#00E676]" />
-                      {currentVideo.views}
-                    </span>
-                    <span className="px-2 py-1 rounded-full bg-black/60 text-[10px] font-mono text-white/80">
-                      {activeVideoIndex + 1}/{filteredVideos.length}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Desktop Prev/Next Controls */}
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-20 pointer-events-auto opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    disabled={activeVideoIndex === 0}
-                    onClick={() => setActiveVideoIndex(Math.max(0, activeVideoIndex - 1))}
-                    className="p-2 rounded-full bg-black/60 text-white disabled:opacity-30 hover:bg-black/90 transition-all"
-                    title="Previous video"
-                  >
-                    <ChevronUp className="w-4 h-4" />
-                  </button>
-                  <button
-                    disabled={activeVideoIndex >= filteredVideos.length - 1}
-                    onClick={() => setActiveVideoIndex(Math.min(filteredVideos.length - 1, activeVideoIndex + 1))}
-                    className="p-2 rounded-full bg-black/60 text-white disabled:opacity-30 hover:bg-black/90 transition-all"
-                    title="Next video"
-                  >
-                    <ChevronDown className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Right Vertical Action Rail */}
-                <div className="absolute right-3 bottom-16 flex flex-col items-center gap-3 z-20 pointer-events-auto">
-                  {/* Creator Avatar + Follow Badge */}
-                  <div className="relative">
-                    <img
-                      onClick={() => openCreatorProfile({
-                        handle: currentVideo.creator.handle,
-                        name: currentVideo.creator.name,
-                        avatar: currentVideo.creator.avatar,
-                      })}
-                      src={currentVideo.creator.avatar}
-                      alt={`${currentVideo.creator.name} football creator`}
-                      loading="lazy"
-                      decoding="async"
-                      className="w-10 h-10 rounded-full object-cover border-2 border-white cursor-pointer shadow-lg hover:scale-105 transition-transform"
-                      title={`View all posts and clips by ${currentVideo.creator.name}`}
-                    />
-                    {!isCreatorConnected(currentVideo.creator.handle) && (
-                      <button
-                        onClick={() => toggleConnectCreator(currentVideo.creator.handle, {
-                          name: currentVideo.creator.name,
-                          avatar: currentVideo.creator.avatar,
-                        })}
-                        className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-[#00E676] text-black flex items-center justify-center shadow font-bold"
-                        title="Connect with creator"
-                      >
-                        <Plus className="w-3 h-3 stroke-[3]" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Like Button */}
-                  <button
-                    onClick={() => {
-                      haptics.like();
-                      toggleLikeVideo(currentVideo.id);
-                      likeVideoOnServer(currentVideo.id, user.id);
-                    }}
-                    className="flex flex-col items-center gap-0.5 text-white"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
-                      <Heart className={`w-5 h-5 ${currentVideo.isLiked ? 'fill-rose-500 text-rose-500' : ''}`} />
-                    </div>
-                    <span className="text-[10px] font-extrabold">{currentVideo.likes}</span>
-                  </button>
-
-                  {/* Comment Button */}
-                  <button
-                    onClick={() => setShowCommentsDrawer(true)}
-                    className="flex flex-col items-center gap-0.5 text-white"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
-                      <MessageCircle className="w-5 h-5" />
-                    </div>
-                    <span className="text-[10px] font-extrabold">{currentVideo.commentsCount || 0}</span>
-                  </button>
-
-                  {/* Remix Clip Button */}
-                  <button
-                    onClick={() => handleRemixClip(currentVideo)}
-                    className="flex flex-col items-center gap-0.5 text-purple-300"
-                    title="Remix or reply with your own clip"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-black/50 text-purple-300 flex items-center justify-center backdrop-blur-md">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
-                    <span className="text-[10px] font-extrabold">Remix</span>
-                  </button>
-
-                  {/* Tip Creator Button */}
-                  <button
-                    onClick={() => {
-                      haptics.like();
-                      sendGiftToCreator(currentVideo.creator.handle, currentVideo.creator.name, {
-                        id: 'ball',
-                        name: 'Match Ball',
-                        icon: '⚽',
-                        price: 1.00,
-                      }, undefined, currentVideo.id);
-                    }}
-                    className="flex flex-col items-center gap-0.5 text-amber-400"
-                    title="Send Match Ball ($1.00 tip)"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-black/50 text-amber-400 flex items-center justify-center backdrop-blur-md">
-                      <Gift className="w-5 h-5 text-amber-400" />
-                    </div>
-                    <span className="text-[10px] font-extrabold text-amber-400">Tip $1</span>
-                  </button>
-
-                  {/* Bookmark Button */}
-                  <button
-                    onClick={() => toggleSaveVideo(currentVideo.id)}
-                    className="flex flex-col items-center gap-0.5 text-white"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
-                      <Bookmark className={`w-5 h-5 ${currentVideo.isSaved ? 'fill-amber-400 text-amber-400' : ''}`} />
-                    </div>
-                    <span className="text-[10px] font-extrabold">Save</span>
-                  </button>
-
-                  {/* Real-Time Share Button */}
-                  <button
-                    onClick={() => handleShareReel(currentVideo)}
-                    className="flex flex-col items-center gap-0.5 text-white"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
-                      <Share2 className="w-5 h-5" />
-                    </div>
-                    <span className="text-[10px] font-extrabold">{currentVideo.shares || 0}</span>
-                  </button>
-                </div>
-
-                {/* Bottom Metadata, Quick Reactions Dock & Sound Ticker */}
-                <div className="absolute left-2.5 right-16 bottom-3 z-20 pointer-events-auto text-white space-y-1.5 bg-gradient-to-t from-black/85 via-black/45 to-transparent p-2.5 rounded-2xl">
-                  {/* Live Emoji Reactions Dock */}
-                  <div className="flex items-center gap-1 flex-wrap">
-                    {(['🔥', '⚽', '👏', '😱', '❤️'] as const).map(emoji => {
-                      const cnt = currentVideo.reactions?.[emoji] || 0;
-                      const active = currentVideo.userReactions?.includes(emoji);
-                      return (
-                        <button
-                          key={emoji}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleEmojiReaction(currentVideo.id, emoji);
-                          }}
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 backdrop-blur-md border transition-all active:scale-95 tabular-nums ${
-                            active
-                              ? 'bg-[#00E676]/25 border-[#00E676] text-[#00E676]'
-                              : 'bg-black/55 border-white/15 text-white hover:bg-black/75'
-                          }`}
-                        >
-                          <span>{emoji}</span>
-                          {cnt > 0 && <span className="font-mono text-[10px]">{cnt}</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span
-                      onClick={() => openCreatorProfile({
-                        handle: currentVideo.creator.handle,
-                        name: currentVideo.creator.name,
-                        avatar: currentVideo.creator.avatar,
-                      })}
-                      className="font-extrabold text-xs cursor-pointer hover:underline"
-                    >
-                      {currentVideo.creator.handle}
-                    </span>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-[#00E676] fill-[#00E676]/20" />
-
-                    {currentVideo.creator.handle !== user.handle && (
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleConnectCreator(currentVideo.creator.handle, {
-                            name: currentVideo.creator.name,
-                            avatar: currentVideo.creator.avatar,
-                          });
-                        }}
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-black transition-all flex items-center gap-0.5 ${
-                          isCreatorConnected(currentVideo.creator.handle)
-                            ? 'bg-[#00E676]/20 text-[#00E676] border border-[#00E676]/40'
-                            : 'bg-[#00E676] text-black hover:bg-emerald-400'
-                        }`}
+                        onClick={() => handleShareReel(currentVideo)}
+                        className="px-2.5 py-1.5 rounded-xl bg-[#00E676] text-black text-[10px] font-black flex items-center gap-1 hover:bg-emerald-400 active:scale-95 transition-all"
                       >
-                        {isCreatorConnected(currentVideo.creator.handle) ? '✓ Connected' : '+ Connect'}
+                        <Smartphone className="w-3 h-3" />
+                        <span>Share</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setDedicatedVideo(currentVideo)}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 dark:bg-white/10 text-white text-[10px] font-bold hover:opacity-90"
+                      >
+                        Full
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLatestUploadedVideoId(null)}
+                        className="p-1.5 rounded-lg text-slate-500 dark:text-white/60 hover:text-slate-900 dark:hover:text-white"
+                        title="Dismiss showcase"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                  onDoubleClick={() => handleDoubleTap(currentVideo.id)}
+                  className={`relative w-full ${
+                    activeVideoSection === 'video'
+                      ? 'aspect-video'
+                      : 'aspect-[9/16] max-h-[68vh]'
+                  } rounded-3xl overflow-hidden bg-black shadow-2xl border border-white/10 select-none group`}
+                >
+                  {/* Video Player with Key, Real Poster Frame & Aspect-Safe Rendering */}
+                  <video
+                    key={currentVideo.id}
+                    ref={videoRef}
+                    src={currentVideo.videoUrl}
+                    poster={currentVideo.thumbnailUrl || undefined}
+                    autoPlay={!dataSavingMode}
+                    preload={dataSavingMode ? 'metadata' : 'auto'}
+                    loop={isLooping && !autoAdvanceReels}
+                    muted={isMuted}
+                    playsInline
+                    onWaiting={() => setVideoBuffering(true)}
+                    onCanPlay={() => {
+                      setVideoBuffering(false);
+                      setVideoError(false);
+                    }}
+                    onPlaying={() => {
+                      setVideoBuffering(false);
+                      setVideoError(false);
+                    }}
+                    onError={() => {
+                      setVideoBuffering(false);
+                      setVideoError(true);
+                    }}
+                    onLoadedMetadata={(e) => {
+                      const d = e.currentTarget.duration;
+                      if (Number.isFinite(d) && d > 0) setReelDuration(d);
+                    }}
+                    onTimeUpdate={(e) => {
+                      setReelProgress(e.currentTarget.currentTime);
+                      const d = e.currentTarget.duration;
+                      if (Number.isFinite(d) && d > 0) setReelDuration(d);
+                    }}
+                    onEnded={() => {
+                      if (autoAdvanceReels && activeVideoIndex < filteredVideos.length - 1) {
+                        setActiveVideoIndex(activeVideoIndex + 1);
+                      }
+                    }}
+                    onClick={() => setIsPlaying(!isPlaying)}
+                    className={`w-full h-full ${
+                      fitMode === 'cover' && activeVideoSection === 'short' ? 'object-cover' : 'object-contain'
+                    } cursor-pointer bg-black`}
+                  />
+
+                  {/* Buffering Indicator */}
+                  {videoBuffering && !videoError && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/35 pointer-events-none z-20">
+                      <div className="w-10 h-10 rounded-full border-3 border-[#00E676] border-t-transparent animate-spin" />
+                    </div>
+                  )}
+
+                  {/* Stream Error Retry Overlay */}
+                  {videoError && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-black/80 text-white z-30 p-4 text-center">
+                      <p className="text-xs font-bold text-white/85">Video stream interrupted or loading slowly</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoError(false);
+                          setVideoBuffering(true);
+                          if (videoRef.current) {
+                            videoRef.current.load();
+                            videoRef.current.play().catch(() => {});
+                          }
+                        }}
+                        className="px-4 py-2 rounded-full bg-[#00E676] text-black font-extrabold text-xs flex items-center gap-1.5"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retry Video</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Paused Play Indicator */}
+                  {!isPlaying && !videoError && (
+                    <div
+                      onClick={() => setIsPlaying(true)}
+                      className="absolute inset-0 flex items-center justify-center bg-black/25 cursor-pointer z-20"
+                    >
+                      <div className="w-16 h-16 rounded-full bg-black/70 border border-white/20 flex items-center justify-center text-white backdrop-blur-md">
+                        <Play className="w-7 h-7 fill-white ml-0.5" />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Heart or Emoji Burst Animation */}
+                  {(heartBurst || reactionBurstEmoji) && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
+                      {reactionBurstEmoji ? (
+                        <span className="text-6xl animate-ping duration-700">{reactionBurstEmoji}</span>
+                      ) : (
+                        <Heart className="w-20 h-20 text-rose-500 fill-rose-500 animate-ping duration-700" />
+                      )}
+                    </div>
+                  )}
+
+                  {/* Top Overlay Controls */}
+                  <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-20 pointer-events-auto">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setIsMuted(!isMuted)}
+                        className="p-2 rounded-full bg-black/60 text-white backdrop-blur-md hover:bg-black"
+                        title={isMuted ? 'Unmute sound' : 'Mute sound'}
+                      >
+                        {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-[#00E676]" />}
+                      </button>
+                      <button
+                        onClick={cyclePlaybackRate}
+                        className="px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-mono font-bold backdrop-blur-md hover:bg-black flex items-center gap-0.5"
+                        title="Playback Speed"
+                      >
+                        <Gauge className="w-3 h-3 text-[#00E676]" />
+                        <span>{playbackRate}x</span>
+                      </button>
+                      {activeVideoSection === 'short' && (
+                        <button
+                          onClick={() => setFitMode(prev => (prev === 'contain' ? 'cover' : 'contain'))}
+                          className="px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-bold backdrop-blur-md hover:bg-black flex items-center gap-1"
+                          title={fitMode === 'contain' ? 'Fill frame' : 'Fit full video'}
+                        >
+                          {fitMode === 'contain' ? <Maximize2 className="w-3 h-3" /> : <Minimize2 className="w-3 h-3 text-[#00E676]" />}
+                          <span>{fitMode === 'contain' ? 'Fit' : 'Fill'}</span>
+                        </button>
+                      )}
+                      {activeVideoSection === 'short' && (
+                        <>
+                          <button
+                            onClick={() => setAutoAdvanceReels(!autoAdvanceReels)}
+                            className={`px-2 py-1 rounded-full backdrop-blur-md transition-colors text-[10px] font-bold flex items-center gap-0.5 ${
+                              autoAdvanceReels ? 'bg-[#00E676]/25 text-[#00E676]' : 'bg-black/60 text-white/60'
+                            }`}
+                            title={autoAdvanceReels ? 'Auto-Next Reel ON' : 'Auto-Next Reel OFF'}
+                          >
+                            <SkipForward className="w-3 h-3" />
+                            <span>Auto</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setIsLooping(!isLooping);
+                              if (!isLooping) setAutoAdvanceReels(false);
+                            }}
+                            className={`p-1.5 rounded-full backdrop-blur-md transition-colors ${
+                              isLooping && !autoAdvanceReels ? 'bg-[#00E676]/25 text-[#00E676]' : 'bg-black/60 text-white/60'
+                            }`}
+                            title={isLooping && !autoAdvanceReels ? 'Loop ON' : 'Loop OFF'}
+                          >
+                            <Repeat className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => handlePictureInPicture(videoRef.current)}
+                        className="p-1.5 rounded-full bg-black/60 text-white backdrop-blur-md hover:bg-black"
+                        title="Picture-in-Picture"
+                      >
+                        <PictureInPicture2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {currentVideo.sizeMb ? (
+                        <span className="px-2 py-1 rounded-full bg-black/70 text-[10px] font-mono font-bold text-[#00E676] backdrop-blur-md">
+                          {currentVideo.sizeMb} MB
+                        </span>
+                      ) : null}
+                      <span className="px-2 py-1 rounded-full bg-black/60 text-[10px] font-bold text-white/90 backdrop-blur-md flex items-center gap-1">
+                        <Eye className="w-3 h-3 text-[#00E676]" />
+                        {currentVideo.views}
+                      </span>
+                      <span className="px-2 py-1 rounded-full bg-black/60 text-[10px] font-mono text-white/80">
+                        {activeVideoIndex + 1}/{filteredVideos.length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Desktop Prev/Next Controls */}
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-20 pointer-events-auto opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      disabled={activeVideoIndex === 0}
+                      onClick={() => setActiveVideoIndex(Math.max(0, activeVideoIndex - 1))}
+                      className="p-2 rounded-full bg-black/60 text-white disabled:opacity-30 hover:bg-black/90 transition-all"
+                      title="Previous video"
+                    >
+                      <ChevronUp className="w-4 h-4" />
+                    </button>
+                    <button
+                      disabled={activeVideoIndex >= filteredVideos.length - 1}
+                      onClick={() => setActiveVideoIndex(Math.min(filteredVideos.length - 1, activeVideoIndex + 1))}
+                      className="p-2 rounded-full bg-black/60 text-white disabled:opacity-30 hover:bg-black/90 transition-all"
+                      title="Next video"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Vertical 9:16 Shorts Overlay Rail + Metadata */}
+                  {activeVideoSection === 'short' && (
+                    <>
+                      {/* Right Vertical Action Rail */}
+                      <div className="absolute right-3 bottom-16 flex flex-col items-center gap-3 z-20 pointer-events-auto">
+                        <div className="relative">
+                          <img
+                            onClick={() => openCreatorProfile({
+                              handle: currentVideo.creator?.handle || '@creator',
+                              name: currentVideo.creator?.name || 'Pitch Creator',
+                              avatar: currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+                            })}
+                            src={currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                            alt={`${currentVideo.creator?.name || 'Pitch Creator'} football creator`}
+                            loading="lazy"
+                            decoding="async"
+                            className="w-10 h-10 rounded-full object-cover border-2 border-white cursor-pointer shadow-lg hover:scale-105 transition-transform"
+                            title={`View all posts and clips by ${currentVideo.creator?.name || 'Pitch Creator'}`}
+                          />
+                          {!isCreatorConnected(currentVideo.creator?.handle || '@creator') && (
+                            <button
+                              onClick={() => toggleConnectCreator(currentVideo.creator?.handle || '@creator', {
+                                name: currentVideo.creator?.name || 'Pitch Creator',
+                                avatar: currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+                              })}
+                              className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-[#00E676] text-black flex items-center justify-center shadow font-bold"
+                              title="Connect with creator"
+                            >
+                              <Plus className="w-3 h-3 stroke-[3]" />
+                            </button>
+                          )}
+                        </div>
+
+                        <button
+                          onClick={() => {
+                            haptics.like();
+                            toggleLikeVideo(currentVideo.id);
+                            likeVideoOnServer(currentVideo.id, user.id);
+                          }}
+                          className="flex flex-col items-center gap-0.5 text-white"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
+                            <Heart className={`w-5 h-5 ${currentVideo.isLiked ? 'fill-rose-500 text-rose-500' : ''}`} />
+                          </div>
+                          <span className="text-[10px] font-extrabold">{currentVideo.likes}</span>
+                        </button>
+
+                        <button
+                          onClick={() => setShowCommentsDrawer(true)}
+                          className="flex flex-col items-center gap-0.5 text-white"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
+                            <MessageCircle className="w-5 h-5" />
+                          </div>
+                          <span className="text-[10px] font-extrabold">{currentVideo.commentsCount || 0}</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleRemixClip(currentVideo)}
+                          className="flex flex-col items-center gap-0.5 text-purple-300"
+                          title="Remix or reply with your own clip"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-black/50 text-purple-300 flex items-center justify-center backdrop-blur-md">
+                            <Sparkles className="w-5 h-5" />
+                          </div>
+                          <span className="text-[10px] font-extrabold">Remix</span>
+                        </button>
+
+                        <button
+                          onClick={() => toggleSaveVideo(currentVideo.id)}
+                          className="flex flex-col items-center gap-0.5 text-white"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
+                            <Bookmark className={`w-5 h-5 ${currentVideo.isSaved ? 'fill-amber-400 text-amber-400' : ''}`} />
+                          </div>
+                          <span className="text-[10px] font-extrabold">Save</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleShareReel(currentVideo)}
+                          className="flex flex-col items-center gap-0.5 text-white"
+                        >
+                          <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center backdrop-blur-md">
+                            <Share2 className="w-5 h-5" />
+                          </div>
+                          <span className="text-[10px] font-extrabold">{currentVideo.shares || 0}</span>
+                        </button>
+                      </div>
+
+                      {/* Bottom Metadata, Quick Reactions Dock & Sound Ticker */}
+                      <div className="absolute left-2.5 right-16 bottom-6 z-20 pointer-events-auto text-white space-y-1.5 bg-gradient-to-t from-black/85 via-black/45 to-transparent p-2.5 rounded-2xl">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {(['🔥', '⚽', '👏', '😱', '❤️'] as const).map(emoji => {
+                            const cnt = currentVideo.reactions?.[emoji] || 0;
+                            const active = currentVideo.userReactions?.includes(emoji);
+                            return (
+                              <button
+                                key={emoji}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEmojiReaction(currentVideo.id, emoji);
+                                }}
+                                className={`px-2 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 backdrop-blur-md border transition-all active:scale-95 tabular-nums ${
+                                  active
+                                    ? 'bg-[#00E676]/25 border-[#00E676] text-[#00E676]'
+                                    : 'bg-black/55 border-white/15 text-white hover:bg-black/75'
+                                }`}
+                              >
+                                <span>{emoji}</span>
+                                {cnt > 0 && <span className="font-mono text-[10px]">{cnt}</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span
+                            onClick={() => openCreatorProfile({
+                              handle: currentVideo.creator?.handle || '@creator',
+                              name: currentVideo.creator?.name || 'Pitch Creator',
+                              avatar: currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+                            })}
+                            className="font-extrabold text-xs cursor-pointer hover:underline"
+                          >
+                            {currentVideo.creator?.handle || '@creator'}
+                          </span>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-[#00E676] fill-[#00E676]/20" />
+
+                          {(currentVideo.creator?.handle || '@creator') !== user.handle && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleConnectCreator(currentVideo.creator?.handle || '@creator', {
+                                  name: currentVideo.creator?.name || 'Pitch Creator',
+                                  avatar: currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+                                });
+                              }}
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-black transition-all flex items-center gap-0.5 ${
+                                isCreatorConnected(currentVideo.creator?.handle || '@creator')
+                                  ? 'bg-[#00E676]/20 text-[#00E676] border border-[#00E676]/40'
+                                  : 'bg-[#00E676] text-black hover:bg-emerald-400'
+                              }`}
+                            >
+                              {isCreatorConnected(currentVideo.creator?.handle || '@creator') ? '✓ Connected' : '+ Connect'}
+                            </button>
+                          )}
+                        </div>
+                        <p
+                          onClick={() => setDedicatedVideo(currentVideo)}
+                          className="text-xs leading-snug line-clamp-2 cursor-pointer hover:underline text-white/95 font-medium"
+                        >
+                          {currentVideo.title}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setIsMuted(!isMuted)}
+                          className="flex items-center gap-1.5 text-[10px] text-white/85 hover:text-[#00E676] pt-0.5 tabular-nums"
+                        >
+                          <Music className="w-3 h-3 text-[#00E676]" />
+                          <span>
+                            {isMuted ? 'Tap for Original Match Sound' : 'Original Pitch Sound ON'} · {currentVideo.duration}
+                          </span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Bottom Interactive Timeline Scrubber + Carousel Dots */}
+                  <div className="absolute bottom-1.5 left-3 right-3 z-20 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsPlaying(!isPlaying)}
+                        className="text-white hover:text-[#00E676]"
+                        aria-label={isPlaying ? 'Pause' : 'Play'}
+                      >
+                        {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={reelDuration || 30}
+                        step={0.1}
+                        value={Math.min(reelProgress, reelDuration || 30)}
+                        onChange={(e) => {
+                          const nextVal = Number(e.target.value);
+                          setReelProgress(nextVal);
+                          if (videoRef.current) videoRef.current.currentTime = nextVal;
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-[#00E676]"
+                      />
+                      <span className="text-[10px] font-mono text-white/85 tabular-nums">
+                        {Math.floor(reelProgress / 60)}:{Math.floor(reelProgress % 60).toString().padStart(2, '0')} /{' '}
+                        {Math.floor((reelDuration || 0) / 60)}:{Math.floor((reelDuration || 0) % 60).toString().padStart(2, '0')}
+                      </span>
+                      {activeVideoSection === 'video' && (
+                        <button
+                          type="button"
+                          onClick={() => setDedicatedVideo(currentVideo)}
+                          className="text-white hover:text-[#00E676]"
+                          title="Open Full Player"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+
+                    {activeVideoSection === 'short' && (
+                      <div className="flex justify-center gap-1">
+                        {filteredVideos.slice(0, 6).map((_, i) => (
+                          <span
+                            key={i}
+                            onClick={() => setActiveVideoIndex(i)}
+                            className={`h-1 rounded-full cursor-pointer transition-all ${
+                              activeVideoIndex === i ? 'w-4 bg-[#00E676]' : 'w-1 bg-white/40'
+                            }`}
+                          />
+                        ))}
+                      </div>
                     )}
                   </div>
-                  <p
-                    onClick={() => setDedicatedVideo(currentVideo)}
-                    className="text-xs leading-snug line-clamp-2 cursor-pointer hover:underline text-white/95 font-medium"
-                  >
-                    {currentVideo.title}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setIsMuted(!isMuted)}
-                    className="flex items-center gap-1.5 text-[10px] text-white/85 hover:text-[#00E676] pt-0.5 tabular-nums"
-                  >
-                    <Music className="w-3 h-3 text-[#00E676]" />
-                    <span>
-                      {isMuted ? 'Tap for Original Match Sound' : 'Original Pitch Sound ON'} · {currentVideo.duration}
-                    </span>
-                  </button>
                 </div>
 
-                {/* Bottom Carousel Indicator dots */}
-                <div className="absolute bottom-1 left-0 right-0 flex justify-center gap-1 z-20">
-                  {filteredVideos.slice(0, 6).map((_, i) => (
-                    <span
-                      key={i}
-                      onClick={() => setActiveVideoIndex(i)}
-                      className={`h-1 rounded-full cursor-pointer transition-all ${
-                        activeVideoIndex === i ? 'w-4 bg-[#00E676]' : 'w-1 bg-white/40'
-                      }`}
-                    />
-                  ))}
-                </div>
+                {/* Unobstructed Widescreen 16:9 Details, Reactions & Actions Below Video Frame */}
+                {activeVideoSection === 'video' && (
+                  <div className="p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/10 shadow-sm space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <h3
+                          onClick={() => setDedicatedVideo(currentVideo)}
+                          className="font-display font-extrabold text-sm text-slate-900 dark:text-white leading-snug cursor-pointer hover:text-[#00E676]"
+                        >
+                          {currentVideo.title}
+                        </h3>
+                        <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-500 dark:text-white/60">
+                          <button
+                            type="button"
+                            onClick={() => openCreatorProfile({
+                              handle: currentVideo.creator?.handle || '@creator',
+                              name: currentVideo.creator?.name || 'Pitch Creator',
+                              avatar: currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+                            })}
+                            className="flex items-center gap-1.5 font-bold text-slate-800 dark:text-white/90 hover:text-[#00E676]"
+                          >
+                            <img
+                              src={currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                              alt={currentVideo.creator?.name || 'Creator'}
+                              className="w-5 h-5 rounded-full object-cover"
+                            />
+                            <span>{currentVideo.creator?.name || 'Pitch Creator'}</span>
+                          </button>
+                          <span>· {currentVideo.views} views</span>
+                          <span>· {currentVideo.duration}</span>
+                        </div>
+                      </div>
+
+                      {(currentVideo.creator?.handle || '@creator') !== user.handle && (
+                        <button
+                          type="button"
+                          onClick={() => toggleConnectCreator(currentVideo.creator?.handle || '@creator', {
+                            name: currentVideo.creator?.name || 'Pitch Creator',
+                            avatar: currentVideo.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+                          })}
+                          className={`px-3 py-1.5 rounded-full text-[11px] font-black shrink-0 transition-all ${
+                            isCreatorConnected(currentVideo.creator?.handle || '@creator')
+                              ? 'bg-[#00E676]/20 text-emerald-700 dark:text-[#00E676]'
+                              : 'bg-[#00E676] text-black hover:bg-emerald-400'
+                          }`}
+                        >
+                          {isCreatorConnected(currentVideo.creator?.handle || '@creator') ? 'Connected' : '+ Connect'}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Emoji Reactions */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {(['🔥', '⚽', '👏', '😱', '❤️'] as const).map(emoji => {
+                        const cnt = currentVideo.reactions?.[emoji] || 0;
+                        const active = currentVideo.userReactions?.includes(emoji);
+                        return (
+                          <button
+                            key={emoji}
+                            onClick={() => handleEmojiReaction(currentVideo.id, emoji)}
+                            className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1 border transition-all active:scale-95 tabular-nums ${
+                              active
+                                ? 'bg-[#00E676]/15 border-[#00E676] text-emerald-700 dark:text-[#00E676]'
+                                : 'bg-slate-50 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-700 dark:text-white/80'
+                            }`}
+                          >
+                            <span>{emoji}</span>
+                            {cnt > 0 && <span className="font-mono text-[10px]">{cnt}</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Action Bar */}
+                    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pt-1">
+                      <button
+                        onClick={() => {
+                          haptics.like();
+                          toggleLikeVideo(currentVideo.id);
+                          likeVideoOnServer(currentVideo.id, user.id);
+                        }}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 border ${
+                          currentVideo.isLiked
+                            ? 'bg-rose-500/10 border-rose-500 text-rose-500'
+                            : 'bg-slate-50 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-700 dark:text-white'
+                        }`}
+                      >
+                        <Heart className={`w-3.5 h-3.5 ${currentVideo.isLiked ? 'fill-rose-500' : ''}`} />
+                        <span>{currentVideo.likes}</span>
+                      </button>
+
+                      <button
+                        onClick={() => setShowCommentsDrawer(true)}
+                        className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-white"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>{currentVideo.commentsCount || 0}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleShareReel(currentVideo)}
+                        className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 bg-[#00E676]/15 border border-[#00E676]/40 text-emerald-700 dark:text-[#00E676]"
+                      >
+                        <Smartphone className="w-3.5 h-3.5" />
+                        <span>Share ({currentVideo.shares || 0})</span>
+                      </button>
+
+                      <button
+                        onClick={() => toggleSaveVideo(currentVideo.id)}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 border ${
+                          currentVideo.isSaved
+                            ? 'bg-amber-500/10 border-amber-500 text-amber-500'
+                            : 'bg-slate-50 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-700 dark:text-white'
+                        }`}
+                      >
+                        <Bookmark className={`w-3.5 h-3.5 ${currentVideo.isSaved ? 'fill-amber-500' : ''}`} />
+                        <span>Save</span>
+                      </button>
+
+                      <button
+                        onClick={() => setDedicatedVideo(currentVideo)}
+                        className="px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 bg-blue-600 text-white ml-auto"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        <span>Full Player</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )
           )}
@@ -1684,20 +1987,16 @@ export const VideosTab: React.FC = () => {
       -------------------------------------------------------------- */}
       {viewMode === 'trending' && (
         <div className="space-y-2.5">
-          {/* Live Realtime Engagement Summary Card */}
+          {/* Trending Header Card */}
           <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/10 via-[#00E676]/10 to-blue-500/10 border border-amber-500/25 flex items-center justify-between gap-2 text-xs">
             <div className="space-y-0.5">
               <div className="font-display font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
                 <Flame className="w-4 h-4 text-amber-500" />
-                <span>Trending Now (Live Quality Engine)</span>
+                <span>Trending Now</span>
               </div>
               <p className="text-[11px] text-slate-600 dark:text-white/65">
-                Ranked live by views, likes, reactions &amp; shares
+                Top fan-voted clips ranked by community engagement
               </p>
-            </div>
-            <div className="text-right font-mono tabular-nums text-[11px] font-bold text-slate-800 dark:text-white/85">
-              <div>{realtimeAnalytics?.totalViews ?? 0} views</div>
-              <div className="text-emerald-700 dark:text-[#00E676]">{(realtimeAnalytics?.totalLikes ?? 0) + (realtimeAnalytics?.totalReactions ?? 0)} likes/reacts</div>
             </div>
           </div>
 
@@ -1714,11 +2013,11 @@ export const VideosTab: React.FC = () => {
               <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                 {Array.from(
                   filteredVideos.reduce((map, vid) => {
-                    const key = vid.creator.handle;
+                    const key = vid.creator?.handle || '@creator';
                     const existing = map.get(key) || {
                       handle: key,
-                      name: vid.creator.name,
-                      avatar: vid.creator.avatar,
+                      name: vid.creator?.name || 'Pitch Creator',
+                      avatar: vid.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
                       score: 0,
                       views: 0,
                     };
@@ -1791,7 +2090,7 @@ export const VideosTab: React.FC = () => {
                       {item.title}
                     </h4>
                     <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-white/55">
-                      <span className="truncate">{item.creator.name}</span>
+                      <span className="truncate">{item.creator?.name || 'Pitch Creator'}</span>
                       {item.sizeMb ? (
                         <span className="font-mono tabular-nums font-bold text-blue-600 dark:text-blue-400">
                           · {item.sizeMb} MB
@@ -1876,8 +2175,8 @@ export const VideosTab: React.FC = () => {
                       {item.title}
                     </h3>
                     <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-white/55 pt-1 border-t border-slate-100 dark:border-white/5 tabular-nums">
-                      <span className="truncate">{item.creator.name}</span>
-                      <span>{item.views}v · ❤️ {item.likes}</span>
+                      <span className="truncate">{item.creator?.name || 'Pitch Creator'}</span>
+                      <span>{item.views || 0}v · ❤️ {item.likes || 0}</span>
                     </div>
                   </div>
                 </div>
@@ -2010,12 +2309,18 @@ export const VideosTab: React.FC = () => {
                         uploadVideoKind === 'video' ? 'aspect-video' : 'aspect-[9/16] max-h-44 mx-auto'
                       } bg-black border border-[#00E676]/40`}
                     >
-                      <video src={uploadBackendUrl} controls playsInline className="w-full h-full object-cover" />
+                      <video
+                        src={uploadBackendUrl}
+                        poster={uploadThumbnail || undefined}
+                        controls
+                        playsInline
+                        className="w-full h-full object-contain"
+                      />
                     </div>
                     <div className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-[10px]">
                       <div className="flex items-center gap-1.5 font-mono font-bold text-[#00E676]">
-                        <HardDrive className="w-3.5 h-3.5" />
-                        <span>{uploadFileSizeMb} MB</span>
+                        <Film className="w-3.5 h-3.5" />
+                        <span>UPLOADED</span>
                       </div>
                       <div className="flex items-center gap-1.5 font-mono text-slate-600 dark:text-white/70">
                         <span>{uploadDurationSec}s</span>
@@ -2196,131 +2501,6 @@ export const VideosTab: React.FC = () => {
           isOpen={showCommentsDrawer}
           onClose={() => setShowCommentsDrawer(false)}
         />
-      )}
-
-      {/* Real-Time PitchReels Engagement Analytics & Media MB Calculator Modal */}
-      {showAnalyticsModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-white/10 p-5 shadow-2xl space-y-4 max-h-[88vh] overflow-y-auto no-scrollbar">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-white/10 pb-3">
-              <div>
-                <h3 className="font-black text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <BarChart3 className="w-4 h-4 text-[#00E676]" />
-                  <span>Real-Time Engagement & Media Calculator</span>
-                </h3>
-                <p className="text-[10px] text-slate-500 dark:text-white/50">
-                  Live backend metrics streamed via SSE (zero fake numbers)
-                </p>
-              </div>
-              <button
-                onClick={() => setShowAnalyticsModal(false)}
-                className="p-1.5 rounded-full text-slate-400 hover:text-slate-900 dark:hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Real-Time Engagement KPIs */}
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
-                <span className="text-[10px] text-slate-500 dark:text-white/50 uppercase font-bold">Total Views</span>
-                <div className="text-lg font-black text-slate-900 dark:text-white font-mono">
-                  {(realtimeAnalytics?.totalViews ?? 0).toLocaleString()}
-                </div>
-              </div>
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
-                <span className="text-[10px] text-slate-500 dark:text-white/50 uppercase font-bold">Total Likes</span>
-                <div className="text-lg font-black text-rose-500 font-mono">
-                  {(realtimeAnalytics?.totalLikes ?? 0).toLocaleString()}
-                </div>
-              </div>
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
-                <span className="text-[10px] text-slate-500 dark:text-white/50 uppercase font-bold">Live Reactions</span>
-                <div className="text-lg font-black text-amber-500 font-mono">
-                  {(realtimeAnalytics?.totalReactions ?? 0).toLocaleString()}
-                </div>
-              </div>
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
-                <span className="text-[10px] text-slate-500 dark:text-white/50 uppercase font-bold">Total Shares</span>
-                <div className="text-lg font-black text-[#00E676] font-mono">
-                  {(realtimeAnalytics?.totalShares ?? 0).toLocaleString()}
-                </div>
-              </div>
-            </div>
-
-            {/* Media Storage Calculator Breakdown (Images MB vs Videos MB) */}
-            <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-black/30 border border-slate-200 dark:border-white/10 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <HardDrive className="w-4 h-4 text-blue-500" />
-                  Media Upload MB Calculator
-                </span>
-                <span className="text-[11px] font-mono font-black text-[#00E676]">
-                  {mediaStorageStats?.totalMb ?? 0} MB Total
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="p-2.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-white/5">
-                  <span className="text-[10px] text-slate-500 dark:text-white/50 block">Images Uploaded ({mediaStorageStats?.imageCount ?? 0})</span>
-                  <span className="text-sm font-black font-mono text-emerald-500">
-                    {mediaStorageStats?.totalImageMb ?? 0} MB
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-white/5">
-                  <span className="text-[10px] text-slate-500 dark:text-white/50 block">Videos Uploaded ({mediaStorageStats?.videoCount ?? 0})</span>
-                  <span className="text-sm font-black font-mono text-blue-500">
-                    {mediaStorageStats?.totalVideoMb ?? 0} MB
-                  </span>
-                </div>
-              </div>
-              {(mediaStorageStats?.recentUploads?.length ?? 0) > 0 && (
-                <div className="space-y-1 pt-1 max-h-28 overflow-y-auto no-scrollbar">
-                  {mediaStorageStats.recentUploads.slice(0, 6).map((u: any) => (
-                    <div key={u.id} className="flex items-center justify-between text-[10px] text-slate-600 dark:text-white/70">
-                      <span className="truncate max-w-[65%]">
-                        {u.mediaKind === 'video' ? '🎬' : '🖼️'} {u.fileName}
-                      </span>
-                      <span className="font-mono font-bold">{u.sizeMb} MB</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Top Trending Reels Ranked Live */}
-            {(realtimeAnalytics?.trendingVideos?.length ?? 0) > 0 && (
-              <div className="space-y-2">
-                <span className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <Flame className="w-4 h-4 text-amber-500" />
-                  Live Trending Leaderboard
-                </span>
-                <div className="space-y-1.5 max-h-40 overflow-y-auto no-scrollbar">
-                  {realtimeAnalytics.trendingVideos.slice(0, 5).map((tv: any, idx: number) => (
-                    <div
-                      key={tv.id}
-                      onClick={() => {
-                        const found = videos.find(v => v.id === tv.id);
-                        if (found) {
-                          setShowAnalyticsModal(false);
-                          setDedicatedVideo(found);
-                        }
-                      }}
-                      className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer text-[11px]"
-                    >
-                      <div className="min-w-0 flex-1 pr-2">
-                        <span className="font-bold text-amber-500 mr-1.5">#{idx + 1}</span>
-                        <span className="font-semibold text-slate-800 dark:text-white truncate">{tv.title}</span>
-                      </div>
-                      <div className="font-mono text-[10px] text-slate-500 dark:text-white/60 shrink-0">
-                        {tv.views}v · {tv.likes}❤️ · {tv.shares}🔗
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
       )}
     </div>
   );

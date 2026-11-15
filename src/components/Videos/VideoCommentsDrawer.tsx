@@ -172,11 +172,11 @@ export const VideoCommentsDrawer: React.FC<VideoCommentsDrawerProps> = ({
               <div key={c.id} className="space-y-1.5">
                 <div className="flex items-start gap-3 text-xs">
                   <img
-                    src={c.author.avatar || user.avatar}
-                    alt={c.author.name}
+                    src={c.author?.avatar || user.avatar}
+                    alt={c.author?.name || 'Supporter'}
                     onClick={() => {
                       onClose();
-                      navigateToProfile(c.author.handle || c.author.name);
+                      navigateToProfile(c.author?.handle || c.author?.name || 'Supporter');
                     }}
                     className="w-8 h-8 rounded-full object-cover ring-1 ring-white/10 shrink-0 mt-0.5 cursor-pointer hover:opacity-80 transition-opacity"
                   />
@@ -185,11 +185,11 @@ export const VideoCommentsDrawer: React.FC<VideoCommentsDrawerProps> = ({
                       <span
                         onClick={() => {
                           onClose();
-                          navigateToProfile(c.author.handle || c.author.name);
+                          navigateToProfile(c.author?.handle || c.author?.name || 'Supporter');
                         }}
                         className="font-bold text-white truncate cursor-pointer hover:underline"
                       >
-                        {c.author.name}
+                        {c.author?.name || 'Supporter'}
                       </span>
                       <span className="text-[10px] text-white/40 font-mono">{c.timestamp}</span>
                     </div>
@@ -209,7 +209,7 @@ export const VideoCommentsDrawer: React.FC<VideoCommentsDrawerProps> = ({
                 {/* Reply trigger button */}
                 <div className="pl-11 flex items-center gap-3 text-[10px] text-white/40">
                   <button
-                    onClick={() => setReplyTarget({ parentId: c.id, authorName: c.author.name })}
+                    onClick={() => setReplyTarget({ parentId: c.id, authorName: c.author?.name || 'Supporter' })}
                     className="hover:text-[#00E676] font-semibold"
                   >
                     Reply
@@ -224,7 +224,7 @@ export const VideoCommentsDrawer: React.FC<VideoCommentsDrawerProps> = ({
                         <CornerDownRight className="w-3.5 h-3.5 text-white/40 shrink-0 mt-1" />
                         <div className="flex-1 bg-white/5 p-2 rounded-xl">
                           <span className="font-bold text-[10px] text-white block">
-                            {r.author.name}
+                            {r.author?.name || 'Supporter'}
                           </span>
                           <p className="text-white/80 text-[11px] mt-0.5">{r.text}</p>
                         </div>

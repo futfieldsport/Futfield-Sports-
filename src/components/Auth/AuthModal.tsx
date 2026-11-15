@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { loginWithEmail, signupWithEmail } from '../../services/supabaseClient';
+import { WORLD_COUNTRIES, getCountryFlag } from '../../data/worldCountries';
+import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -36,33 +38,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [favoriteClub, setFavoriteClub] = useState('Arsenal');
+  const [customClubInput, setCustomClubInput] = useState('');
+  const [clubSearchFilter, setClubSearchFilter] = useState('');
   const [favoriteCountry, setFavoriteCountry] = useState('Nigeria');
+  const [countrySearchFilter, setCountrySearchFilter] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const clubOptions = [
-    { name: 'Arsenal', crest: '🔴⚪' },
-    { name: 'Barcelona', crest: '🔵🔴' },
-    { name: 'Real Madrid', crest: '👑⚪' },
-    { name: 'Man United', crest: '🔴👹' },
-    { name: 'Chelsea', crest: '🔵🦁' },
-    { name: 'Bayern Munich', crest: '🔴🛡️' },
-    { name: 'Liverpool', crest: '🔴🦅' },
-    { name: 'Man City', crest: '🩵🚢' },
-  ];
+  const filteredClubs = clubSearchFilter.trim()
+    ? POPULAR_TOP_5_CLUBS.filter(
+        c =>
+          c.name.toLowerCase().includes(clubSearchFilter.toLowerCase()) ||
+          c.country.toLowerCase().includes(clubSearchFilter.toLowerCase()) ||
+          c.leagueName.toLowerCase().includes(clubSearchFilter.toLowerCase())
+      )
+    : POPULAR_TOP_5_CLUBS;
 
-  const countryOptions = [
-    { name: 'Nigeria', flag: '🇳🇬' },
-    { name: 'England', flag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿' },
-    { name: 'Brazil', flag: '🇧🇷' },
-    { name: 'Argentina', flag: '🇦🇷' },
-    { name: 'France', flag: '🇫🇷' },
-    { name: 'Spain', flag: '🇪🇸' },
-    { name: 'Germany', flag: '🇩🇪' },
-  ];
+  const filteredCountries = countrySearchFilter.trim()
+    ? WORLD_COUNTRIES.filter(
+        c =>
+          c.name.toLowerCase().includes(countrySearchFilter.toLowerCase()) ||
+          c.code.toLowerCase().includes(countrySearchFilter.toLowerCase())
+      )
+    : WORLD_COUNTRIES;
+
+  const resolvedFavoriteClub =
+    favoriteClub === '__custom__' ? customClubInput.trim() || 'Futfield FC' : favoriteClub;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,7 +79,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         const result = await signupWithEmail(email, password, {
           name: name || email.split('@')[0],
           handle: handle ? (handle.startsWith('@') ? handle : `@${handle}`) : `@${email.split('@')[0]}`,
-          favoriteClub,
+          favoriteClub: resolvedFavoriteClub,
           favoriteCountry,
         });
 
@@ -87,6 +91,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (result.profile) {
           updateUser({
             ...result.profile,
+            favoriteClub: resolvedFavoriteClub,
+            favoriteCountry,
+            favoriteCountryFlag: getCountryFlag(favoriteCountry),
             email,
             isAuthenticated: true,
           });
@@ -133,8 +140,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       email: email || 'fan@futfield.com',
       name: name || email.split('@')[0] || 'Verified Fan',
       handle: handle ? (handle.startsWith('@') ? handle : `@${handle}`) : `@${(email || 'fan').split('@')[0]}`,
-      favoriteClub,
+      favoriteClub: resolvedFavoriteClub,
       favoriteCountry,
+      favoriteCountryFlag: getCountryFlag(favoriteCountry),
       isAuthenticated: true,
     });
     setSuccessMsg('Verified Fan access activated!');
@@ -314,37 +322,87 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             )}
           </div>
 
-          {/* Club & Country Selection for Sign Up */}
+          {/* All World Countries & Global Clubs Selection for Sign Up */}
           {mode === 'signup' && (
-            <div className="grid grid-cols-2 gap-2.5 pt-1">
+            <div className="space-y-2.5 pt-1">
               <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-700 dark:text-white/65">Favorite Club</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-slate-700 dark:text-white/65">
+                    Country ({WORLD_COUNTRIES.length} Countries)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Filter country..."
+                    value={countrySearchFilter}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setCountrySearchFilter(val);
+                      const firstMatch = WORLD_COUNTRIES.find(c =>
+                        c.name.toLowerCase().includes(val.toLowerCase())
+                      );
+                      if (firstMatch) setFavoriteCountry(firstMatch.name);
+                    }}
+                    className="w-28 bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-[10px] rounded-lg px-2 py-1 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                  />
+                </div>
                 <select
-                  value={favoriteClub}
-                  onChange={e => setFavoriteClub(e.target.value)}
+                  value={favoriteCountry}
+                  onChange={e => setFavoriteCountry(e.target.value)}
                   className="w-full min-h-[42px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                 >
-                  {clubOptions.map(c => (
-                    <option key={c.name} value={c.name} className="dark:bg-[#12171F]">
-                      {c.crest} {c.name}
+                  {filteredCountries.map(c => (
+                    <option key={c.code + c.name} value={c.name} className="dark:bg-[#12171F]">
+                      {c.flag} {c.name}
                     </option>
                   ))}
                 </select>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-700 dark:text-white/65">Country</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-slate-700 dark:text-white/65">
+                    Favorite Club ({POPULAR_TOP_5_CLUBS.length}+ Clubs)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Filter club..."
+                    value={clubSearchFilter}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setClubSearchFilter(val);
+                      const firstMatch = POPULAR_TOP_5_CLUBS.find(c =>
+                        c.name.toLowerCase().includes(val.toLowerCase())
+                      );
+                      if (firstMatch) setFavoriteClub(firstMatch.name);
+                    }}
+                    className="w-28 bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-[10px] rounded-lg px-2 py-1 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                  />
+                </div>
                 <select
-                  value={favoriteCountry}
-                  onChange={e => setFavoriteCountry(e.target.value)}
+                  value={favoriteClub}
+                  onChange={e => setFavoriteClub(e.target.value)}
                   className="w-full min-h-[42px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                 >
-                  {countryOptions.map(c => (
-                    <option key={c.name} value={c.name} className="dark:bg-[#12171F]">
-                      {c.flag} {c.name}
+                  {filteredClubs.map(c => (
+                    <option key={c.id} value={c.name} className="dark:bg-[#12171F]">
+                      {c.flag} {c.name} ({c.leagueName})
                     </option>
                   ))}
+                  <option value="__custom__" className="dark:bg-[#12171F]">
+                    ⚽ Other / Enter Custom Club Name...
+                  </option>
                 </select>
+
+                {favoriteClub === '__custom__' && (
+                  <input
+                    type="text"
+                    placeholder="Type any football club worldwide..."
+                    value={customClubInput}
+                    onChange={e => setCustomClubInput(e.target.value)}
+                    className="w-full mt-1 bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl px-3 py-2 border border-[#00E676]/50 focus:outline-none"
+                    required
+                  />
+                )}
               </div>
             </div>
           )}

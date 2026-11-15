@@ -225,6 +225,7 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
     addNotification,
     navigateToProfile,
     setPricingModalOpen,
+    openShareSheet,
   } = useFootball();
 
   const { triggerMessage } = useHaptics();
@@ -284,6 +285,9 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [showScrollBottomPill, setShowScrollBottomPill] = useState(false);
 
+  const userRef = useRef(user);
+  userRef.current = user;
+
   // 1. Initial Load & Realtime Subscription for Messages, Typing & Presence
   const loadRoomMessages = useCallback(async () => {
     const serverMsgs = await fetchServerMatchMessages(match.id, user.id);
@@ -294,9 +298,10 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
 
   useEffect(() => {
     loadRoomMessages();
+    const activeUser = userRef.current;
 
     // Subscribe to Supabase Realtime channel + Server-Sent Events stream
-    const unsubscribe = subscribeToMatchRoomRealtime(match.id, user, {
+    const unsubscribe = subscribeToMatchRoomRealtime(match.id, activeUser, {
       onNewMessage: (incomingMsg) => {
         setMessages(prev => {
           if (prev.some(m => m.id === incomingMsg.id)) return prev;
@@ -304,7 +309,7 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
         });
         if (incomingMsg.messageType === 'goal' || incomingMsg.messageType === 'red') {
           haptics.goalAlert();
-        } else if (incomingMsg.user?.id !== user.id) {
+        } else if (incomingMsg.user?.id !== userRef.current.id) {
           haptics.light();
         }
       },
@@ -343,7 +348,8 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
         );
       },
       onTypingChanged: (fans) => {
-        const others = fans.filter((f: any) => f.userId !== user.id && f.userId !== user.handle);
+        const cur = userRef.current;
+        const others = fans.filter((f: any) => f.userId !== cur.id && f.userId !== cur.handle);
         setTypingFans(others);
       },
       onPresenceUpdated: (presence) => {
@@ -359,16 +365,16 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
       },
     });
 
-    const presencePayload = {
-      id: user.id,
-      name: user.name,
-      handle: user.handle,
-      avatar: user.avatar,
-      favoriteClub: user.favoriteClub,
-    };
+    const getPresencePayload = () => ({
+      id: userRef.current.id,
+      name: userRef.current.name,
+      handle: userRef.current.handle,
+      avatar: userRef.current.avatar,
+      favoriteClub: userRef.current.favoriteClub,
+    });
 
     // Announce room entry immediately on mount so live viewer count updates in real time
-    sendMatchRoomPresence(match.id, presencePayload).then(res => {
+    sendMatchRoomPresence(match.id, getPresencePayload()).then(res => {
       if (res && typeof res.viewersCount === 'number') {
         setViewersCount(res.viewersCount);
         setViewerAvatars(res.viewers || []);
@@ -377,7 +383,7 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
 
     // Heartbeat every 15s to keep live presence fresh
     const presenceHeartbeat = setInterval(() => {
-      sendMatchRoomPresence(match.id, presencePayload).then(res => {
+      sendMatchRoomPresence(match.id, getPresencePayload()).then(res => {
         if (res && typeof res.viewersCount === 'number') {
           setViewersCount(res.viewersCount);
           setViewerAvatars(res.viewers || []);
@@ -388,9 +394,9 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
     return () => {
       unsubscribe();
       clearInterval(presenceHeartbeat);
-      leaveMatchRoomPresence(match.id, user.id || user.handle || 'guest').catch(() => {});
+      leaveMatchRoomPresence(match.id, userRef.current.id || userRef.current.handle || 'guest').catch(() => {});
     };
-  }, [loadRoomMessages, match.id, user]);
+  }, [loadRoomMessages, match.id, user.id]);
 
   // Handle typing debounce
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -676,14 +682,21 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
       recorder.stream.getTracks().forEach(track => track.stop());
     };
 
-    recorder.stop();
+    if (recorder.state !== 'inactive') {
+      recorder.stop();
+    }
     setIsRecording(false);
   };
 
   const cancelVoiceRecording = () => {
     if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
-      mediaRecorderRef.current.stop();
+      try {
+        mediaRecorderRef.current.onstop = null;
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+        }
+      } catch {}
     }
     clearInterval(recordingTimerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
@@ -1038,6 +1051,28 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
               title="Media Gallery"
             >
               <ImageIcon className="w-4 h-4" />
+            </button>
+
+            {/* Share Live Match Room to Phone */}
+            <button
+              onClick={() => {
+                const path = `/match/${encodeURIComponent(match.id)}`;
+                const url =
+                  typeof window !== 'undefined' && window.location?.origin
+                    ? `${window.location.origin}${path}`
+                    : `https://futfieldsport.com.ng${path}`;
+                openShareSheet({
+                  kind: 'match',
+                  targetId: match.id,
+                  title: `Live Match Room: ${match.homeTeam.name} vs ${match.awayTeam.name}`,
+                  text: `Join live fan chat (${match.homeTeam.score}-${match.awayTeam.score}) on FUTFIELD!`,
+                  url,
+                });
+              }}
+              className="p-1.5 rounded-full text-slate-600 dark:text-white/80 hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
+              title="Share match room to phone"
+            >
+              <Share2 className="w-4 h-4" />
             </button>
 
             {/* Quick Goal Webhook Button for Testing Live Match Engine */}

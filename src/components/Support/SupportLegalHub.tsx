@@ -144,9 +144,9 @@ export const SupportLegalHub: React.FC = () => {
     {
       id: 'faq_uploads',
       category: 'Media & PitchReels',
-      question: 'How do image and video uploads calculate exact MB sizes?',
+      question: 'How do image and video uploads process on the backend?',
       answer:
-        'Every image and PitchReel uploaded through FUTFIELD streams as binary bytes directly to /api/media/upload on our backend server. While uploading, you see the Uploading splash screen until the server confirms UPLOADED and updates exact Image MB and Video MB storage totals.',
+        'Every image and PitchReel uploaded through FUTFIELD streams as binary bytes directly to /api/media/upload on our backend server. While uploading, you see the Uploading splash screen until the server verifies format, duration, and copyright rules and confirms UPLOADED.',
     },
     {
       id: 'faq_scores',
@@ -193,14 +193,14 @@ export const SupportLegalHub: React.FC = () => {
       id: 'res_pitchreels',
       category: 'Creator Guide',
       readTime: '4 min read',
-      title: 'PitchReels Upload, Sound Sync & Exact MB Storage Guide',
+      title: 'PitchReels 9:16 Shorts, 16:9 Videos & Sound Sync Guide',
       summary:
-        'Best practices for publishing vertical 9:16 football clips and matchday photos with real-time backend storage tracking.',
+        'Best practices for publishing 9:16 vertical shorts (≤ 2m) and 16:9 football highlights (≤ 3m) with MediaGuard copyright checks.',
       steps: [
-        'Use the Post Composer on Home or the Creator Studio upload panel to pick a photo or 9:16 video clip with sound.',
+        'Use the Post Composer on Home or the PitchReels upload flow to pick a photo or football clip.',
         'Watch the dedicated Uploading splash modal while binary bytes stream directly to the backend /api/media/upload endpoint.',
-        'Wait for the UPLOADED confirmation—your content immediately goes live in Home and PitchReels with live views, likes, reactions, and share counts.',
-        'Monitor total uploaded Image MB and Video MB separately from the Home Feed Media Storage bar.',
+        'Wait for the UPLOADED confirmation—MediaGuard scans copyright & format rules on the backend automatically.',
+        'Your content immediately goes live in Home or PitchReels for fans worldwide.',
       ],
       actionLabel: 'Open PitchReels',
       actionTab: 'videos',

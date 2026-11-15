@@ -7,7 +7,6 @@ import {
   Share2,
   Film,
   FileText,
-  Gift,
   Shield,
   Award,
   TrendingUp,
@@ -42,15 +41,13 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
     videos,
     isCreatorConnected,
     toggleConnectCreator,
-    sendGiftToCreator,
     toggleLikePost,
     toggleLikeVideo,
     user,
+    openShareSheet,
   } = useFootball();
 
   const [activeTab, setActiveTab] = useState<'posts' | 'videos'>('posts');
-  const [showGiftDrawer, setShowGiftDrawer] = useState(false);
-  const [giftSuccessMsg, setGiftSuccessMsg] = useState<string | null>(null);
   const [selectedVideoToPlay, setSelectedVideoToPlay] = useState<VideoItem | null>(null);
 
   if (!isOpen || !creator) return null;
@@ -59,10 +56,10 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
 
   // Filter posts and videos authored by this specific creator
   const creatorPosts = posts.filter(
-    p => p.author.handle.toLowerCase() === creator.handle.toLowerCase()
+    p => (p.author?.handle || '').toLowerCase() === (creator.handle || '').toLowerCase()
   );
   const creatorVideos = videos.filter(
-    v => v.creator.handle.toLowerCase() === creator.handle.toLowerCase()
+    v => (v.creator?.handle || '').toLowerCase() === (creator.handle || '').toLowerCase()
   );
 
   const handleConnect = () => {
@@ -72,20 +69,6 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
       avatar: creator.avatar,
       clubBadge: creator.clubBadge,
     });
-  };
-
-  const stadiumGifts = [
-    { id: 'ball', name: 'Match Ball', icon: '⚽', price: 1.00 },
-    { id: 'flare', name: 'Ultra Flare', icon: '🔥', price: 2.00 },
-    { id: 'strike', name: 'Thunder Strike', icon: '⚡', price: 3.00 },
-    { id: 'trophy', name: 'Golden Trophy', icon: '🏆', price: 5.00 },
-  ];
-
-  const handleSendGift = async (gift: { id: string; name: string; icon: string; price: number }) => {
-    await sendGiftToCreator(creator.handle, creator.name, gift);
-    setShowGiftDrawer(false);
-    setGiftSuccessMsg(`Gift ${gift.name} sent to ${creator.name}!`);
-    setTimeout(() => setGiftSuccessMsg(null), 2500);
   };
 
   return (
@@ -119,15 +102,8 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
               </span>
             </div>
 
-            {/* Action Buttons: Connect & Tip */}
+            {/* Action Buttons: Connect */}
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowGiftDrawer(prev => !prev)}
-                className="px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/30 text-xs font-black flex items-center gap-1 hover:bg-amber-500/20 transition-all active:scale-95"
-              >
-                <Gift className="w-3.5 h-3.5" />
-                <span>Tip</span>
-              </button>
 
               <button
                 onClick={handleConnect}
@@ -163,13 +139,6 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
             <div className="p-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 text-[11px] font-bold text-emerald-600 dark:text-[#00E676]">
               <TrendingUp className="w-4 h-4 shrink-0" />
               <span>You are connected! {creator.name}&apos;s match posts and videos now appear first at the top of your feed.</span>
-            </div>
-          )}
-
-          {/* Toast on gift sent */}
-          {giftSuccessMsg && (
-            <div className="p-2 rounded-xl bg-emerald-500 text-black font-extrabold text-xs text-center animate-bounce">
-              {giftSuccessMsg}
             </div>
           )}
 
@@ -259,10 +228,28 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
                         <MessageSquare className="w-3.5 h-3.5" />
                         <span>{post.commentsCount}</span>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const handle = (creator.handle || '@creator').replace(/^@?/, '@');
+                          const url =
+                            typeof window !== 'undefined' && window.location?.origin
+                              ? `${window.location.origin}/profile/${encodeURIComponent(handle)}`
+                              : `https://futfieldsport.com.ng/profile/${encodeURIComponent(handle)}`;
+                          openShareSheet({
+                            kind: 'post',
+                            targetId: post.id,
+                            title: `${creator.name} on FUTFIELD`,
+                            text: post.content.slice(0, 140),
+                            url,
+                            previewImage: post.mediaUrl || creator.avatar,
+                          });
+                        }}
+                        className="flex items-center gap-1 hover:text-[#00E676] transition-colors"
+                      >
                         <Share2 className="w-3.5 h-3.5" />
                         <span>{post.shares}</span>
-                      </div>
+                      </button>
                     </div>
                   </div>
                 ))
@@ -348,42 +335,6 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
                   className="w-full max-h-full object-contain"
                 />
               )}
-            </div>
-          </div>
-        )}
-
-        {/* Gift Selector Drawer */}
-        {showGiftDrawer && (
-          <div className="p-4 bg-slate-900 border-t border-amber-500/30 space-y-3 animate-in slide-in-from-bottom">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-xs font-black text-white flex items-center gap-1.5">
-                  <Gift className="w-4 h-4 text-amber-400" />
-                  Send Matchday Gift to {creator.name}
-                </h4>
-                <p className="text-[10px] text-white/60">
-                  Transferred instantly via FUTFIELD Creator Rewards
-                </p>
-              </div>
-              <button
-                onClick={() => setShowGiftDrawer(false)}
-                className="text-white/60 hover:text-white text-xs"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="grid grid-cols-4 gap-2">
-              {stadiumGifts.map(g => (
-                <button
-                  key={g.id}
-                  onClick={() => handleSendGift(g)}
-                  className="p-2.5 rounded-2xl bg-white/5 border border-white/10 hover:border-amber-400 hover:bg-amber-400/10 flex flex-col items-center gap-1 transition-all active:scale-95 group"
-                >
-                  <span className="text-2xl group-hover:scale-110 transition-transform">{g.icon}</span>
-                  <span className="text-[10px] font-bold text-white truncate max-w-full">{g.name}</span>
-                  <span className="text-[10px] font-black text-[#00E676]">${g.price.toFixed(2)}</span>
-                </button>
-              ))}
             </div>
           </div>
         )}

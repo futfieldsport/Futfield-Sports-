@@ -60,26 +60,26 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const matchedVideos = q
     ? videos.filter(
         v =>
-          v.title.toLowerCase().includes(q) ||
-          v.description.toLowerCase().includes(q) ||
+          (v.title || '').toLowerCase().includes(q) ||
+          (v.description || '').toLowerCase().includes(q) ||
           (v.clubTag && v.clubTag.toLowerCase().includes(q)) ||
-          v.creator.name.toLowerCase().includes(q)
+          (v.creator?.name || '').toLowerCase().includes(q)
       ).slice(0, 4)
     : [];
 
   const matchedCommunities = q
     ? communities.filter(
-        c => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)
+        c => (c.name || '').toLowerCase().includes(q) || (c.description || '').toLowerCase().includes(q)
       )
     : communities.slice(0, 4);
 
   const matchedPosts = q
     ? posts.filter(
         p =>
-          p.content.toLowerCase().includes(q) ||
-          p.author.name.toLowerCase().includes(q) ||
+          (p.content || '').toLowerCase().includes(q) ||
+          (p.author?.name || '').toLowerCase().includes(q) ||
           (p.clubTag && p.clubTag.toLowerCase().includes(q)) ||
-          p.tags.some(t => t.toLowerCase().includes(q))
+          (p.tags || []).some(t => t.toLowerCase().includes(q))
       )
     : [];
 
@@ -234,9 +234,9 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     className="w-full min-h-[48px] text-left p-3 rounded-xl bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 border border-slate-200/80 dark:border-white/5 flex items-center justify-between gap-2 transition-colors"
                   >
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.title}</div>
+                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">{v.title || 'Matchday Clip'}</div>
                       <div className="text-[11px] text-slate-500 dark:text-white/50 truncate">
-                        {v.creator.name} · {v.views} views · {v.likes} likes
+                        {v.creator?.name || 'Pitch Creator'} · {v.views || 0} views · {v.likes || 0} likes
                       </div>
                     </div>
                     <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -293,8 +293,8 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     className="w-full text-left p-3 rounded-xl bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 border border-slate-200/80 dark:border-white/5 space-y-1 transition-colors"
                   >
                     <div className="flex items-center gap-1.5 text-xs">
-                      <span className="font-bold text-slate-900 dark:text-white">{p.author.name}</span>
-                      <span className="text-slate-400 dark:text-white/40">· {p.timestamp}</span>
+                      <span className="font-bold text-slate-900 dark:text-white">{p.author?.name || 'Supporter'}</span>
+                      <span className="text-slate-400 dark:text-white/40">· {p.timestamp || 'Recently'}</span>
                     </div>
                     <p className="text-xs text-slate-700 dark:text-white/80 line-clamp-2">{p.content}</p>
                   </button>
