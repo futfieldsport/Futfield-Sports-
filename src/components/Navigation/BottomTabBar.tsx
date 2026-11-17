@@ -1,11 +1,17 @@
 import React from 'react';
-import { Home, Calendar, PlaySquare, Video, LayoutGrid, User } from 'lucide-react';
+import { Home, Calendar, Video, LayoutGrid, User } from 'lucide-react';
 import { useFootball, MainTab } from '../../context/FootballContext';
+import { FutfieldTubeLogo } from '../Videos/FutfieldTubeLogo';
 import { haptics } from '../../utils/haptics';
+import { scrollToTopInstant } from '../../utils/scroll';
 
 interface BottomTabBarProps {
   embedded?: boolean;
 }
+
+const TubeNavIcon: React.FC<{ className?: string }> = () => (
+  <FutfieldTubeLogo size={20} />
+);
 
 export const BottomTabBar: React.FC<BottomTabBarProps> = ({ embedded }) => {
   const { activeTab, setActiveTab, matches, navigateToProfile } = useFootball();
@@ -15,7 +21,7 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({ embedded }) => {
   const tabs: { id: MainTab; label: string; icon: React.FC<{ className?: string }> }[] = [
     { id: 'home', label: 'Home', icon: Home },
     { id: 'scores', label: 'Scores', icon: Calendar },
-    { id: 'videos', label: 'Videos', icon: PlaySquare },
+    { id: 'videos', label: 'Tube', icon: TubeNavIcon },
     { id: 'studio', label: 'Studio', icon: Video },
     { id: 'menu', label: 'Menu', icon: LayoutGrid },
     { id: 'profile', label: 'Profile', icon: User },
@@ -26,7 +32,7 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({ embedded }) => {
       aria-label="Primary navigation"
       className={`${
         embedded ? 'relative w-full' : 'fixed bottom-0 left-0 right-0 z-40'
-      } bg-white/95 dark:bg-[#090D12]/95 backdrop-blur-lg border-t border-slate-200/80 dark:border-white/10 pb-safe transition-colors`}
+      } bg-white/95 dark:bg-[#090D12]/95 backdrop-blur-lg border-t border-slate-200/80 dark:border-white/10 pb-safe`}
     >
       <div className="max-w-2xl mx-auto grid grid-cols-6 items-center h-16 px-1">
         {tabs.map(tab => {
@@ -37,6 +43,7 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({ embedded }) => {
               key={tab.id}
               onClick={() => {
                 haptics.light();
+                scrollToTopInstant();
                 if (tab.id === 'profile') {
                   navigateToProfile();
                 } else {

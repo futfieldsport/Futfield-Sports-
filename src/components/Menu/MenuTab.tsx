@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  BrainCircuit,
+  Flame,
   Shield,
   Layers,
   Award,
@@ -60,7 +60,6 @@ export const MenuTab: React.FC = () => {
     addFanPoints,
     addNotification,
     setPlayerScoutModalOpen,
-    setAiDrawerOpen,
     setActiveTab,
     openSupportLegalPage,
     setPricingModalOpen,
@@ -467,13 +466,13 @@ export const MenuTab: React.FC = () => {
             <button
               onClick={() => {
                 haptics.light();
-                setAiDrawerOpen(true);
+                setActiveTab('videos');
               }}
               className="w-full flex items-center justify-between p-2.5 hover:bg-slate-50 dark:hover:bg-white/5 rounded-2xl transition-all"
             >
               <div className="flex items-center gap-2.5">
-                <BrainCircuit className="w-4 h-4 text-emerald-400" />
-                <span className="font-extrabold text-slate-800 dark:text-white">Tactical IQ Intelligence Core</span>
+                <Flame className="w-4 h-4 text-[#00E676]" />
+                <span className="font-extrabold text-slate-800 dark:text-white">Futfield Tube Clips</span>
               </div>
               <ChevronRight className="w-4 h-4 text-slate-400" />
             </button>

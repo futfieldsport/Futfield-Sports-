@@ -8,6 +8,7 @@
         "@google/genai": "^3.0.0",
         "@iamglitch404/fotmob": "^1.0.2",
         "@netlify/functions": "^6.1.1",
+        "@paystack/inline-js": "^2.28.1",
         "@supabase/supabase-js": "^2.118.0",
         "@tailwindcss/vite": "^4.3.3",
         "@types/qrcode": "^1.5.6",
@@ -416,6 +417,8 @@
     "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.45.0", "", {}, "sha512-aOP45mbcOKbQVvFWfQmgoOPT8R2iwbbbgl83k4CujGV9BrJhFr3qG55MFpwFs4YLabpuW3HhzUY9eQxPlDqaZw=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.156.0", "", {}, "sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw=="],
+
+    "@paystack/inline-js": ["@paystack/inline-js@2.28.1", "", {}, "sha512-0uixNwLGfYdUY/rsovXc8rnO5vMGD/OAeh01RyBIEdsjSQkgo4mMB8XyV9v6AMl3z5rBIqZzSJtBotyNCb7+uQ=="],
 
     "@pinojs/redact": ["@pinojs/redact@0.4.0", "", {}, "sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg=="],
 

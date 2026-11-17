@@ -234,9 +234,95 @@ export interface MatchChatMessage {
   status?: 'sending' | 'sent' | 'delivered' | 'read';
 }
 
+export interface FutubeShout {
+  id: string;
+  videoId: string;
+  userId: string;
+  authorName: string;
+  authorHandle: string;
+  authorAvatar: string;
+  text: string;
+  parentId?: string | null;
+  cheers: number;
+  hasCheered?: boolean;
+  createdAt: string;
+  replies?: FutubeShout[];
+}
+
+export interface MatchdayPack {
+  id: string;
+  userId: string;
+  name: string;
+  videoIds: string[];
+  createdAt: string;
+}
+
+export interface FanZoneProfile {
+  id: string;
+  username: string;
+  handle: string;
+  name: string;
+  avatar: string;
+  bannerUrl: string;
+  bio: string;
+  favoriteClub?: string;
+  squadCount: number;
+  clipsCount: number;
+  quickKicksCount: number;
+  totalWatches: number;
+  isConnected: boolean;
+  alertEnabled: boolean;
+  clips: VideoItem[];
+  quickKicks: VideoItem[];
+  packs: MatchdayPack[];
+}
+
+export interface FanZoneBattle {
+  id: string;
+  title: string;
+  category: string;
+  status: 'LIVE' | 'ENDED';
+  createdAt: string;
+  leftSide: {
+    fanzoneName: string;
+    fanzoneHandle: string;
+    fanzoneAvatar: string;
+    videoId: string;
+    videoTitle: string;
+    thumbnailUrl: string;
+    videoUrl: string;
+    votes: number;
+  };
+  rightSide: {
+    fanzoneName: string;
+    fanzoneHandle: string;
+    fanzoneAvatar: string;
+    videoId: string;
+    videoTitle: string;
+    thumbnailUrl: string;
+    videoUrl: string;
+    votes: number;
+  };
+  userVotedSide?: 'left' | 'right' | null;
+}
+
+export interface FutubeCaptionCue {
+  startSec: number;
+  endSec: number;
+  english: string;
+  pidgin: string;
+}
+
 export interface VideoItem {
   id: string;
   userId?: string;
+  fanzoneId?: string;
+  fanzoneName?: string;
+  fanzoneHandle?: string;
+  fanzoneAvatar?: string;
+  fanzoneBio?: string;
+  fanzoneBanner?: string;
+  squadCount?: number;
   title: string;
   description: string;
   videoUrl: string;
@@ -244,8 +330,21 @@ export interface VideoItem {
   duration: string;
   durationSeconds: number;
   views: number;
+  watches?: number;
+  cheers?: number;
+  boos?: number;
+  shoutsCount?: number;
+  hasCheered?: boolean;
+  hasBooed?: boolean;
+  alertEnabled?: boolean;
   clubTag?: string;
   privacy?: 'public' | 'followers' | 'private';
+  visibility?: 'public' | 'squad' | 'private';
+  isQuickKick?: boolean;
+  isMatchLive?: boolean;
+  hasWatermark?: boolean;
+  boostFirst60?: boolean;
+  tubeCategory?: string;
   createdAt?: string;
   creator: {
     name: string;

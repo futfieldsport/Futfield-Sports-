@@ -1,52 +1,68 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Futfield - Football Fan App | Live Scores &amp; Match Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('futfield_theme');
+          var theme = saved === 'light' ? 'light' : 'dark';
+          var root = document.documentElement;
+          if (theme === 'dark') {
+            root.classList.add('dark');
+            root.style.colorScheme = 'dark';
+          } else {
+            root.classList.remove('dark');
+            root.style.colorScheme = 'light';
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <title>FUTFIELD — Live Football Scores, Match Rooms &amp; Futfield Tube</title>
     <meta
       name="description"
-      content="Join worldwide football fans on Futfield - share posts, videos, live scores, match chat. Free football community."
+      content="Join worldwide football fans on FUTFIELD! Watch match highlights, join live stadium rooms, and connect with football fans worldwide."
     />
     <meta
       name="keywords"
-      content="football app, live scores, football social, soccer chat, match highlights"
+      content="football app, live scores, football social, soccer chat, match highlights, futfield tube, quick kicks, fanzone"
     />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="author" content="Futfield" />
     <meta name="theme-color" content="#00E676" />
-    <meta name="google-site-verification" content="PASTE_FROM_CONSOLE" />
-    <link rel="canonical" href="https://futfieldsport.com.ng/" />
+    <link rel="canonical" href="https://futfieldsports.com.ng/" />
 
-    <!-- Open Graph / Social Cards -->
+    <!-- Open Graph / WhatsApp Social Sharing Card -->
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Futfield" />
-    <meta property="og:title" content="Futfield - Football Fan App | Live Scores &amp; Match Chat" />
+    <meta property="og:site_name" content="FUTFIELD" />
+    <meta property="og:title" content="FUTFIELD — Join me on FUTFIELD!" />
     <meta
       property="og:description"
-      content="Join worldwide football fans on Futfield - share posts, videos, live scores, match chat. Free football community."
+      content="Watch match highlights, join live stadium rooms, and connect with football fans worldwide."
     />
-    <meta property="og:url" content="https://futfieldsport.com.ng/" />
-    <meta property="og:image" content="https://futfieldsport.com.ng/og-image.jpg" />
-    <meta property="og:image:secure_url" content="https://futfieldsport.com.ng/og-image.jpg" />
+    <meta property="og:url" content="https://futfieldsports.com.ng/" />
+    <meta property="og:image" content="https://futfieldsports.com.ng/futfield-logo.jpg" />
+    <meta property="og:image:secure_url" content="https://futfieldsports.com.ng/futfield-logo.jpg" />
     <meta property="og:image:type" content="image/jpeg" />
-    <meta property="og:image:width" content="1920" />
-    <meta property="og:image:height" content="1280" />
-    <meta property="og:image:alt" content="Futfield football stadium live scores and fan chat community" />
+    <meta property="og:image:width" content="600" />
+    <meta property="og:image:height" content="600" />
+    <meta property="og:image:alt" content="FUTFIELD - Stadium Green Football Logo" />
 
     <!-- Twitter / X Card -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@futfieldsport" />
-    <meta name="twitter:title" content="Futfield - Football Fan App | Live Scores &amp; Match Chat" />
+    <meta name="twitter:title" content="FUTFIELD — Join me on FUTFIELD!" />
     <meta
       name="twitter:description"
-      content="Join worldwide football fans on Futfield - share posts, videos, live scores, match chat. Free football community."
+      content="Watch match highlights, join live stadium rooms, and connect with football fans worldwide."
     />
-    <meta name="twitter:image" content="https://futfieldsport.com.ng/og-image.jpg" />
-    <meta name="twitter:image:alt" content="Futfield illuminated football stadium banner" />
+    <meta name="twitter:image" content="https://futfieldsports.com.ng/futfield-logo.jpg" />
+    <meta name="twitter:image:alt" content="FUTFIELD football stadium banner and logo" />
 
-    <link rel="icon" type="image/jpeg" href="/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg" />
-    <link rel="apple-touch-icon" href="/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg" />
+    <link rel="icon" type="image/jpeg" href="/futfield-logo.jpg" />
+    <link rel="apple-touch-icon" href="/futfield-logo.jpg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -61,17 +77,15 @@
         "@type": "Organization",
         "name": "Futfield",
         "alternateName": "FUTFIELD",
-        "url": "https://futfieldsport.com.ng",
+        "url": "https://futfieldsports.com.ng",
         "logo": {
           "@type": "ImageObject",
-          "url": "https://futfieldsport.com.ng/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg"
+          "url": "https://futfieldsports.com.ng/futfield-logo.jpg"
         },
         "email": "futfieldsport@gmail.com",
         "sameAs": [
           "https://x.com/futfieldsport",
           "https://www.instagram.com/futfieldsport",
-          "https://www.youtube.com/@futfieldsport",
-          "https://www.tiktok.com/@futfieldsport",
           "https://www.facebook.com/futfieldsport"
         ]
       }
@@ -81,13 +95,13 @@
         "@context": "https://schema.org",
         "@type": "WebSite",
         "name": "Futfield",
-        "url": "https://futfieldsport.com.ng",
-        "description": "Join worldwide football fans on Futfield - share posts, videos, live scores, match chat. Free football community.",
+        "url": "https://futfieldsports.com.ng",
+        "description": "Join worldwide football fans on FUTFIELD! Watch match highlights, join live stadium rooms, and connect with football fans worldwide.",
         "potentialAction": {
           "@type": "SearchAction",
           "target": {
             "@type": "EntryPoint",
-            "urlTemplate": "https://futfieldsport.com.ng/?q={search_term_string}"
+            "urlTemplate": "https://futfieldsports.com.ng/?q={search_term_string}"
           },
           "query-input": "required name=search_term_string"
         }

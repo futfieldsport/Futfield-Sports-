@@ -214,12 +214,12 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </div>
           )}
 
-          {/* PitchReels Videos */}
+          {/* Futfield Tube Clips */}
           {matchedVideos.length > 0 && (
             <div className="space-y-2">
               <div className="text-xs font-bold text-slate-500 dark:text-white/50 flex items-center gap-1.5">
-                <PlaySquare className="w-3.5 h-3.5 text-blue-500" />
-                <span>PitchReels Highlights</span>
+                <PlaySquare className="w-3.5 h-3.5 text-[#00C853]" />
+                <span>Futfield Tube Highlights</span>
               </div>
               <div className="space-y-1.5">
                 {matchedVideos.map(v => (

@@ -272,12 +272,24 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
                       onClick={() => setSelectedVideoToPlay(vid)}
                       className="group cursor-pointer rounded-2xl overflow-hidden bg-slate-100 dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/5 space-y-1.5 pb-2 hover:border-[#00E676] transition-all"
                     >
-                      <div className="aspect-[9/12] relative overflow-hidden bg-black">
-                        <img
-                          src={vid.thumbnailUrl}
-                          alt={vid.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                        />
+                      <div className="aspect-video relative overflow-hidden bg-black">
+                        {vid.thumbnailUrl ? (
+                          <img
+                            src={vid.thumbnailUrl}
+                            alt={vid.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                        ) : vid.videoUrl ? (
+                          <video
+                            src={`${vid.videoUrl}#t=0.5`}
+                            muted
+                            playsInline
+                            preload="metadata"
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-slate-900" />
+                        )}
                         <div className="absolute inset-0 bg-black/20 group-hover:bg-black/0 transition-colors flex items-center justify-center">
                           <div className="p-2.5 rounded-full bg-black/60 text-white backdrop-blur-sm group-hover:scale-110 transition-transform">
                             <Play className="w-4 h-4 fill-white" />

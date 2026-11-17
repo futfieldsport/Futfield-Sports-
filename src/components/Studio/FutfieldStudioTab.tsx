@@ -68,9 +68,11 @@ export const FutfieldStudioTab: React.FC = () => {
     refreshMediaAndAnalytics,
     openShareSheet,
     openVideoInReels,
+    deleteVideo,
   } = useFootball();
+  const [confirmDeleteVideoId, setConfirmDeleteVideoId] = useState<string | null>(null);
 
-  // Studio Sub-Navigation Tabs matching YouTube Studio structure
+  // Studio Sub-Navigation Tabs matching Futfield Tube Studio structure
   const [studioSection, setStudioSection] = useState<
     'dashboard' | 'content' | 'analytics' | 'upload' | 'thumbnail' | 'comments' | 'monetization'
   >('dashboard');
@@ -108,6 +110,8 @@ export const FutfieldStudioTab: React.FC = () => {
   const [studioUploadSizeBytes, setStudioUploadSizeBytes] = useState<number>(0);
   const [studioUploadError, setStudioUploadError] = useState<string | null>(null);
   const studioVideoInputRef = useRef<HTMLInputElement | null>(null);
+  const studioThumbInputRef = useRef<HTMLInputElement | null>(null);
+  const [studioThumbUploading, setStudioThumbUploading] = useState(false);
 
   // Thumbnail Studio State
   const [thumbHeadline, setThumbHeadline] = useState('MATCHDAY HIGHLIGHTS & TACTICS');
@@ -411,7 +415,7 @@ export const FutfieldStudioTab: React.FC = () => {
   return (
     <div className="pb-24 max-w-2xl mx-auto px-3 sm:px-4 pt-3 space-y-4">
       {/* ============================================================= */}
-      {/* YOUTUBE STUDIO HEADER & CHANNEL BRANDING */}
+      {/* FUTFIELD TUBE STUDIO HEADER & FANZONE BRANDING */}
       {/* ============================================================= */}
       <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm space-y-3">
         <div className="flex items-center justify-between gap-2">
@@ -471,7 +475,7 @@ export const FutfieldStudioTab: React.FC = () => {
           </button>
         </div>
 
-        {/* YouTube Studio Navigation Tabs */}
+        {/* Futfield Tube Studio Navigation Tabs */}
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-2 border-t border-slate-100 dark:border-white/5">
           {[
             { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
@@ -513,7 +517,7 @@ export const FutfieldStudioTab: React.FC = () => {
       </div>
 
       {/* ============================================================= */}
-      {/* SECTION 1: DASHBOARD (YouTube Studio Style) */}
+      {/* SECTION 1: DASHBOARD (FanZone Studio) */}
       {/* ============================================================= */}
       {studioSection === 'dashboard' && (
         <div className="space-y-4">
@@ -581,14 +585,24 @@ export const FutfieldStudioTab: React.FC = () => {
 
             {latestVideo ? (
               <div className="flex items-center gap-3">
-                <div className="w-16 h-16 rounded-2xl bg-black overflow-hidden relative shrink-0">
-                  <img
-                    src={latestVideo.thumbnailUrl || '/assets/aistudio/IMG-20261102-WA2735_f2548d41.jpg'}
-                    alt={latestVideo.title}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
-                  <span className="absolute bottom-1 right-1 p-0.5 rounded bg-black/80 text-[9px] font-mono tabular-nums text-white">
+                <div className="w-24 aspect-video rounded-xl bg-black overflow-hidden relative shrink-0">
+                  {latestVideo.thumbnailUrl ? (
+                    <img
+                      src={latestVideo.thumbnailUrl}
+                      alt={latestVideo.title}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : latestVideo.videoUrl ? (
+                    <video
+                      src={`${latestVideo.videoUrl}#t=0.4`}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="w-full h-full object-cover"
+                    />
+                  ) : null}
+                  <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/80 text-[9px] font-mono tabular-nums text-white">
                     {latestVideo.duration || '0:45'}
                   </span>
                 </div>
@@ -676,7 +690,7 @@ export const FutfieldStudioTab: React.FC = () => {
       )}
 
       {/* ============================================================= */}
-      {/* SECTION 2: CONTENT MANAGER (YouTube Studio Style Table) */}
+      {/* SECTION 2: CONTENT MANAGER */}
       {/* ============================================================= */}
       {studioSection === 'content' && (
         <div className="space-y-3.5">
@@ -751,7 +765,7 @@ export const FutfieldStudioTab: React.FC = () => {
                     className="flex-1 min-h-[42px] px-3 rounded-xl bg-[#00E676] hover:bg-[#00c864] text-black font-black text-xs flex items-center justify-center gap-1.5"
                   >
                     <Play className="w-3.5 h-3.5 fill-black" />
-                    <span>Watch in PitchReels</span>
+                    <span>Watch in Futfield Tube</span>
                   </button>
                   <button
                     type="button"
@@ -759,9 +773,10 @@ export const FutfieldStudioTab: React.FC = () => {
                       kind: 'video',
                       targetId: lastPublishedVideo.id,
                       title: lastPublishedVideo.title,
-                      text: `Watch "${lastPublishedVideo.title}" on FUTFIELD PitchReels!`,
-                      url: buildShareUrl('/highlights'),
+                      text: `Watch "${lastPublishedVideo.title}" on Futfield Tube!`,
+                      url: buildShareUrl(`/tube/watch/${encodeURIComponent(lastPublishedVideo.id)}`),
                       previewImage: lastPublishedVideo.thumbnailUrl,
+                      videoUrl: lastPublishedVideo.videoUrl,
                     })}
                     className="min-h-[42px] px-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs flex items-center gap-1.5"
                   >
@@ -784,9 +799,9 @@ export const FutfieldStudioTab: React.FC = () => {
                   <div className="flex items-start gap-3">
                     <div
                       onClick={() => openVideoInReels(vid.id)}
-                      className="w-16 h-16 rounded-2xl bg-black overflow-hidden relative shrink-0 cursor-pointer"
+                      className="w-24 aspect-video rounded-xl bg-black overflow-hidden relative shrink-0 cursor-pointer"
                     >
-                      {vid.thumbnailUrl && !vid.thumbnailUrl.includes('IMG-20261106-WA6972') && !vid.thumbnailUrl.includes('IMG-20261102-WA2735') ? (
+                      {vid.thumbnailUrl ? (
                         <img
                           src={vid.thumbnailUrl}
                           alt={vid.title}
@@ -802,13 +817,11 @@ export const FutfieldStudioTab: React.FC = () => {
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <img
-                          src={vid.thumbnailUrl}
-                          alt={vid.title}
-                          className="w-full h-full object-cover"
-                        />
+                        <div className="w-full h-full flex items-center justify-center bg-slate-900 text-white/40">
+                          <Video className="w-5 h-5" />
+                        </div>
                       )}
-                      <span className="absolute bottom-1 right-1 p-0.5 rounded bg-black/80 text-[8px] font-mono text-white">
+                      <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/80 text-[9px] font-mono text-white tabular-nums">
                         {vid.duration || '0:30'}
                       </span>
                     </div>
@@ -841,7 +854,7 @@ export const FutfieldStudioTab: React.FC = () => {
                       <button
                         onClick={() => openVideoInReels(vid.id)}
                         className="px-2.5 py-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-[#00E676] font-bold text-[11px] flex items-center gap-1"
-                        title="Play in PitchReels"
+                        title="Play in Futfield Tube"
                       >
                         <Play className="w-3 h-3" />
                         <span>Play</span>
@@ -867,9 +880,10 @@ export const FutfieldStudioTab: React.FC = () => {
                             kind: 'video',
                             targetId: vid.id,
                             title: vid.title,
-                            text: `Watch "${vid.title}" (${vid.duration || '0:30'}) on FUTFIELD PitchReels!`,
-                            url: buildShareUrl('/highlights'),
+                            text: `Watch "${vid.title}" (${vid.duration || '0:30'}) on Futfield Tube!`,
+                            url: buildShareUrl(`/tube/watch/${encodeURIComponent(vid.id)}`),
                             previewImage: vid.thumbnailUrl,
+                            videoUrl: vid.videoUrl,
                           });
                         }}
                         className="p-1.5 rounded-xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-700 dark:text-white"
@@ -877,6 +891,36 @@ export const FutfieldStudioTab: React.FC = () => {
                       >
                         <Share2 className="w-3.5 h-3.5" />
                       </button>
+                      {confirmDeleteVideoId === vid.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              deleteVideo(vid.id);
+                              setConfirmDeleteVideoId(null);
+                            }}
+                            className="px-2 py-1 rounded-lg bg-rose-600 text-white font-bold text-[10px]"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteVideoId(null)}
+                            className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-white text-[10px]"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteVideoId(vid.id)}
+                          className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400"
+                          title="Delete video"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1249,6 +1293,56 @@ export const FutfieldStudioTab: React.FC = () => {
             />
           </div>
 
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-bold text-slate-700 dark:text-white/80">
+                Video Thumbnail (Futfield Tube Cover)
+              </label>
+              <span className="text-[10px] font-bold text-emerald-700 dark:text-[#00E676]">
+                {studioThumbUploading
+                  ? 'Uploading thumbnail...'
+                  : newVideoThumbUrl
+                  ? 'Thumbnail Ready ✓'
+                  : 'Upload custom image'}
+              </span>
+            </div>
+            <input
+              ref={studioThumbInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (!file) return;
+                setStudioThumbUploading(true);
+                const res = await uploadFileToBackend(file, 'video-thumbnails', file.name, undefined, user.id);
+                setStudioThumbUploading(false);
+                if (res.success && res.url) {
+                  setNewVideoThumbUrl(res.url);
+                }
+              }}
+            />
+            <div className="flex items-center gap-3">
+              {newVideoThumbUrl && (
+                <img
+                  src={newVideoThumbUrl}
+                  alt="Uploaded video thumbnail preview"
+                  referrerPolicy="no-referrer"
+                  className="w-28 aspect-video rounded-xl object-cover border border-[#00E676]"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => studioThumbInputRef.current?.click()}
+                className="flex-1 min-h-[44px] px-3 py-2 rounded-xl border border-dashed border-slate-300 dark:border-white/20 hover:border-[#00E676] text-xs font-bold text-slate-700 dark:text-white flex items-center justify-center gap-2"
+              >
+                <ImageIcon className="w-4 h-4 text-[#00E676]" />
+                <span>{newVideoThumbUrl ? 'Change Custom Thumbnail' : 'Upload Video Thumbnail Image'}</span>
+              </button>
+            </div>
+          </div>
+
           <button
             type="submit"
             disabled={isSubmittingUpload || !newVideoTitle.trim() || studioUploadStatus !== 'uploaded'}
@@ -1279,7 +1373,7 @@ export const FutfieldStudioTab: React.FC = () => {
                   Video Thumbnail Generator
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-white/50">
-                  Render custom matchday graphics for YouTube and Shorts clips
+                  Render custom matchday graphics for Futfield Tube and Quick Kicks clips
                 </p>
               </div>
 

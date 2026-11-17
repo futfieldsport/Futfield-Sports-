@@ -385,6 +385,18 @@ export async function reactToPostOnServer(
   }
 }
 
+export async function deleteVideoOnServer(videoId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/db/videos/${encodeURIComponent(videoId)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    return Boolean(data.success);
+  } catch {
+    return false;
+  }
+}
+
 export async function likeVideoOnServer(videoId: string, userId: string): Promise<{ success: boolean; isLiked: boolean; likesCount: number }> {
   try {
     const res = await fetch(`/api/db/videos/${videoId}/like`, {
@@ -1021,3 +1033,370 @@ export async function updateSupportTicketStatus(
     return { success: false };
   }
 }
+
+// =============================================================
+// FUTFIELD TUBE Client APIs
+// =============================================================
+export async function fetchFutubeVideos(params: {
+  category?: string;
+  search?: string;
+  sort?: 'goals_boost' | 'on_fire' | 'newest';
+  offset?: number;
+  limit?: number;
+  userId?: string;
+  fanzone?: string;
+}): Promise<{ videos: any[]; total: number; hasMore: boolean }> {
+  try {
+    const q = new URLSearchParams();
+    if (params.category) q.set('category', params.category);
+    if (params.search) q.set('search', params.search);
+    if (params.sort) q.set('sort', params.sort);
+    if (params.offset !== undefined) q.set('offset', String(params.offset));
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    if (params.userId) q.set('userId', params.userId);
+    if (params.fanzone) q.set('fanzone', params.fanzone);
+    const res = await fetch(`/api/futube/videos?${q.toString()}`);
+    if (!res.ok) return { videos: [], total: 0, hasMore: false };
+    const data = await res.json();
+    return {
+      videos: Array.isArray(data.videos) ? data.videos : [],
+      total: Number(data.total || 0),
+      hasMore: Boolean(data.hasMore),
+    };
+  } catch {
+    return { videos: [], total: 0, hasMore: false };
+  }
+}
+
+export async function fetchFutubeVideoDetail(
+  videoId: string,
+  userId?: string
+): Promise<{ video: any | null; upNext: any[] }> {
+  try {
+    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}${q}`);
+    if (!res.ok) return { video: null, upNext: [] };
+    const data = await res.json();
+    return {
+      video: data.video || null,
+      upNext: Array.isArray(data.upNext) ? data.upNext : [],
+    };
+  } catch {
+    return { video: null, upNext: [] };
+  }
+}
+
+export async function publishFutubeVideo(payload: any): Promise<{
+  success: boolean;
+  video?: any;
+  remainingToday?: number | 'unlimited';
+  limitReached?: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/futube/videos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video: payload }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Unable to publish clip' };
+  }
+}
+
+export async function deleteFutubeVideo(videoId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    return Boolean(data.success);
+  } catch {
+    return false;
+  }
+}
+
+export async function recordFutubeWatchOnServer(
+  videoId: string,
+  userId: string,
+  watchedSeconds: number
+): Promise<{ counted: boolean; watches: number }> {
+  try {
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}/watch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, watchedSeconds }),
+    });
+    const data = await res.json();
+    return { counted: Boolean(data.counted), watches: Number(data.watches || 0) };
+  } catch {
+    return { counted: false, watches: 0 };
+  }
+}
+
+export async function toggleFutubeCheerOnServer(
+  videoId: string,
+  userId: string
+): Promise<{ success: boolean; hasCheered: boolean; cheers: number; boos: number }> {
+  try {
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}/cheer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false, hasCheered: false, cheers: 0, boos: 0 };
+  }
+}
+
+export async function toggleFutubeBooOnServer(
+  videoId: string,
+  userId: string
+): Promise<{ success: boolean; hasBooed: boolean; boos: number; cheers: number }> {
+  try {
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}/boo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false, hasBooed: false, boos: 0, cheers: 0 };
+  }
+}
+
+export async function reportFutubeVideo(
+  videoId: string,
+  userId: string,
+  reason: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, reason }),
+    });
+    const data = await res.json();
+    return Boolean(data.success);
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchFutubeShouts(
+  videoId: string,
+  sort: 'newest' | 'top_cheers' = 'newest',
+  userId?: string
+): Promise<any[]> {
+  try {
+    const q = new URLSearchParams({ sort });
+    if (userId) q.set('userId', userId);
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}/shouts?${q.toString()}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.shouts) ? data.shouts : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function postFutubeShout(
+  videoId: string,
+  payload: {
+    userId: string;
+    authorName: string;
+    authorHandle: string;
+    authorAvatar: string;
+    text: string;
+    parentId?: string | null;
+  }
+): Promise<{ success: boolean; shout?: any; shoutsCount?: number }> {
+  try {
+    const res = await fetch(`/api/futube/videos/${encodeURIComponent(videoId)}/shouts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function cheerFutubeShout(
+  shoutId: string,
+  userId: string
+): Promise<{ success: boolean; hasCheered: boolean; cheers: number }> {
+  try {
+    const res = await fetch(`/api/futube/shouts/${encodeURIComponent(shoutId)}/cheer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false, hasCheered: false, cheers: 0 };
+  }
+}
+
+export async function toggleFutubeConnect(
+  fanId: string,
+  fanzoneId: string
+): Promise<{ success: boolean; isConnected: boolean; alertEnabled: boolean; squadCount: number }> {
+  try {
+    const res = await fetch('/api/futube/connects/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fanId, fanzoneId }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false, isConnected: false, alertEnabled: false, squadCount: 0 };
+  }
+}
+
+export async function toggleFutubeAlert(
+  fanId: string,
+  fanzoneId: string
+): Promise<{ success: boolean; alertEnabled: boolean; isConnected: boolean }> {
+  try {
+    const res = await fetch('/api/futube/connects/alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fanId, fanzoneId }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false, alertEnabled: false, isConnected: false };
+  }
+}
+
+export async function fetchFanZoneProfile(username: string, userId?: string): Promise<any | null> {
+  try {
+    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const res = await fetch(`/api/futube/fanzone/${encodeURIComponent(username)}${q}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.fanzone || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchMatchdayPacks(userId: string): Promise<any[]> {
+  try {
+    const res = await fetch(`/api/futube/packs?userId=${encodeURIComponent(userId)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.packs) ? data.packs : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveToMatchdayPack(
+  userId: string,
+  videoId: string,
+  packName: string
+): Promise<{ success: boolean; pack?: any }> {
+  try {
+    const res = await fetch('/api/futube/packs/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, videoId, packName }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function fetchFutubeCaptions(videoId: string): Promise<any[]> {
+  try {
+    const res = await fetch(`/api/futube/captions/${encodeURIComponent(videoId)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.cues) ? data.cues : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchFutubeBattles(userId?: string): Promise<any[]> {
+  try {
+    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const res = await fetch(`/api/futube/battles${q}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.battles) ? data.battles : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createFutubeBattle(
+  title: string,
+  leftVideoId: string,
+  rightVideoId: string
+): Promise<{ success: boolean; battle?: any; error?: string }> {
+  try {
+    const res = await fetch('/api/futube/battles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, leftVideoId, rightVideoId }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function voteFutubeBattle(
+  battleId: string,
+  userId: string,
+  side: 'left' | 'right'
+): Promise<{ success: boolean; battle?: any }> {
+  try {
+    const res = await fetch(`/api/futube/battles/${encodeURIComponent(battleId)}/vote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, side }),
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function fetchLiveMatchChat(
+  videoId: string,
+  userId?: string
+): Promise<{ isSquadMember: boolean; fanzoneId: string; messages: any[] }> {
+  try {
+    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const res = await fetch(`/api/futube/live-chat/${encodeURIComponent(videoId)}${q}`);
+    if (!res.ok) return { isSquadMember: false, fanzoneId: '', messages: [] };
+    return await res.json();
+  } catch {
+    return { isSquadMember: false, fanzoneId: '', messages: [] };
+  }
+}
+
+export async function postLiveMatchChat(
+  videoId: string,
+  payload: { userId: string; userName: string; userAvatar: string; text: string }
+): Promise<{ success: boolean; message?: any; squadRequired?: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/futube/live-chat/${encodeURIComponent(videoId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch {
+    return { success: false };
+  }
+}
+

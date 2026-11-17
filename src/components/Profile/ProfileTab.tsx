@@ -30,6 +30,7 @@ import {
   Loader2,
   ExternalLink,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
@@ -61,7 +62,9 @@ export const ProfileTab: React.FC = () => {
     toggleFollowUser,
     openShareSheet,
     openVideoInReels,
+    deleteVideo,
   } = useFootball();
+  const [confirmDeleteVideoId, setConfirmDeleteVideoId] = useState<string | null>(null);
 
   const isOwnProfile = !viewingProfileUserId || viewingProfileUserId === user.id || viewingProfileUserId === user.handle;
 
@@ -787,19 +790,23 @@ export const ProfileTab: React.FC = () => {
             <div className="grid grid-cols-2 gap-2.5">
               {userVideos.map(v => {
                 const isShort = v.videoKind !== 'video' && v.aspectRatio !== '16:9';
+                const canDelete = isOwnProfile || v.userId === user.id || v.creator?.handle === user.handle;
                 return (
                   <div
                     key={v.id}
-                    onClick={() => openVideoInReels(v.id)}
-                    className="rounded-2xl overflow-hidden bg-slate-900 border border-slate-200/80 dark:border-white/10 group cursor-pointer flex flex-col"
+                    className="rounded-2xl overflow-hidden bg-white dark:bg-[#12171F] border border-slate-200/80 dark:border-white/10 group flex flex-col"
                   >
-                    <div className={`relative w-full bg-black overflow-hidden ${isShort ? 'aspect-[9/12]' : 'aspect-video'}`}>
-                      {v.thumbnailUrl && !v.thumbnailUrl.includes('IMG-20261102-WA2735') ? (
+                    <div
+                      onClick={() => openVideoInReels(v.id)}
+                      className={`relative w-full bg-black overflow-hidden cursor-pointer ${isShort ? 'aspect-[9/12]' : 'aspect-video'}`}
+                    >
+                      {v.thumbnailUrl ? (
                         <img
                           src={v.thumbnailUrl}
                           alt={`${v.title || 'football match highlight'} thumbnail`}
                           loading="lazy"
                           decoding="async"
+                          referrerPolicy="no-referrer"
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                         />
                       ) : v.videoUrl ? (
@@ -811,28 +818,64 @@ export const ProfileTab: React.FC = () => {
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <img
-                          src={v.thumbnailUrl}
-                          alt={`${v.title || 'football match highlight'} thumbnail`}
-                          loading="lazy"
-                          decoding="async"
-                          className="w-full h-full object-cover"
-                        />
+                        <div className="w-full h-full flex items-center justify-center bg-slate-900 text-white/40">
+                          <Video className="w-6 h-6" />
+                        </div>
                       )}
-                      <span className="absolute bottom-1.5 right-1.5 bg-black/80 px-1.5 py-0.5 text-[10px] font-mono text-white rounded">
+                      <span className="absolute bottom-1.5 right-1.5 bg-black/80 px-1.5 py-0.5 text-[10px] font-mono text-white rounded tabular-nums">
                         {v.duration || '0:30'}
                       </span>
-                      <span className="absolute top-1.5 left-1.5 bg-black/75 px-1.5 py-0.5 text-[9px] font-bold text-[#00E676] rounded">
-                        {isShort ? '9:16 Short' : '16:9 Video'}
-                      </span>
                     </div>
-                    <div className="p-2 bg-white dark:bg-[#12171F]">
-                      <p className="text-[11px] font-bold text-slate-900 dark:text-white line-clamp-1">
-                        {v.title}
-                      </p>
-                      <p className="text-[10px] text-slate-500 dark:text-white/55 tabular-nums">
-                        {v.views || 0} views · {v.likes || 0} likes
-                      </p>
+                    <div className="p-2.5 space-y-1.5 flex-1 flex flex-col justify-between">
+                      <div onClick={() => openVideoInReels(v.id)} className="cursor-pointer">
+                        <p className="text-xs font-bold text-slate-900 dark:text-white line-clamp-1">
+                          {v.title}
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-white/55 tabular-nums">
+                          {isShort ? 'Short' : 'Video'} · {v.views || 0} views · {v.likes || 0} likes
+                        </p>
+                      </div>
+                      {canDelete && (
+                        <div className="pt-1 border-t border-slate-100 dark:border-white/5">
+                          {confirmDeleteVideoId === v.id ? (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteVideo(v.id);
+                                  setConfirmDeleteVideoId(null);
+                                }}
+                                className="flex-1 min-h-[34px] px-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold"
+                              >
+                                Confirm Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDeleteVideoId(null);
+                                }}
+                                className="min-h-[34px] px-2.5 rounded-lg bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white text-[11px] font-semibold"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteVideoId(v.id);
+                              }}
+                              className="w-full min-h-[34px] px-2.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete Video</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

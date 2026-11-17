@@ -27,6 +27,7 @@ import {
   CheckCircle2,
   TrendingUp,
   Radio,
+  Download,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { Post, PostComment } from '../../types/football';
@@ -49,7 +50,7 @@ import {
   inspectVideoMetadata,
   captureVideoPosterFrame,
 } from '../../utils/mediaUpload';
-import { buildShareUrl } from '../../utils/share';
+import { buildShareUrl, downloadVideoFile } from '../../utils/share';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
 
 const FEELINGS_LIST = [
@@ -85,6 +86,8 @@ export const HomeTab: React.FC = () => {
     refreshMediaAndAnalytics,
     openShareSheet,
     openVideoInReels,
+    targetPostId,
+    setTargetPostId,
   } = useFootball();
 
   const { triggerMessage, triggerSuccess, triggerWarning } = useHaptics();
@@ -126,8 +129,9 @@ export const HomeTab: React.FC = () => {
   // Fullscreen Image Viewer
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
-  // Share feedback
+  // Share & download feedback
   const [shareFeedbackId, setShareFeedbackId] = useState<string | null>(null);
+  const [downloadingPostId, setDownloadingPostId] = useState<string | null>(null);
 
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [uploadStatus, setUploadStatus] = useState<UploadSplashStatus>('idle');
@@ -159,6 +163,16 @@ export const HomeTab: React.FC = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [fullscreenImage, editingPost]);
+
+  useEffect(() => {
+    if (!targetPostId) return;
+    const el = document.getElementById(`post-${targetPostId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const timer = setTimeout(() => setTargetPostId(null), 4500);
+      return () => clearTimeout(timer);
+    }
+  }, [targetPostId, posts.length, setTargetPostId]);
 
   const handleContentInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setContent(e.target.value);
@@ -379,20 +393,46 @@ export const HomeTab: React.FC = () => {
     });
   };
 
-  // Share Post directly to user's phone
+  // Share Post directly to user's phone or feed
   const handleShare = async (post: Post) => {
     setShareFeedbackId(post.id);
     sharePostOnServer(post.id).catch(() => {});
-    const authorHandle = post.author?.handle || '@fan';
     openShareSheet({
       kind: 'post',
       targetId: post.id,
       title: `FUTFIELD Post by ${post.author?.name || 'Supporter'}`,
       text: post.content || 'Check out this matchday post on FUTFIELD!',
-      url: buildShareUrl(`/profile/${encodeURIComponent(authorHandle)}`),
+      url: buildShareUrl(`/?post=${encodeURIComponent(post.id)}`),
       previewImage: post.thumbnailUrl || post.imageUrl || post.author?.avatar,
+      videoUrl: post.videoUrl || (post.mediaType === 'video' ? post.mediaUrl : undefined),
     });
     setTimeout(() => setShareFeedbackId(null), 2000);
+  };
+
+  const handleDownloadPostVideo = async (post: Post) => {
+    const src = post.videoUrl || post.mediaUrl;
+    if (!src || downloadingPostId === post.id) return;
+    haptics.light();
+    setDownloadingPostId(post.id);
+    const result = await downloadVideoFile({
+      title: `futfield_${post.author?.name || 'clip'}_${post.id.slice(-6)}`,
+      videoUrl: src,
+    });
+    setDownloadingPostId(null);
+    if (result.success) {
+      haptics.success();
+      addNotification({
+        title: 'Video Saved to Device',
+        body: `Downloaded "${result.filename}".`,
+        type: 'system',
+      });
+    } else {
+      addNotification({
+        title: 'Download Failed',
+        body: result.error || 'Could not download this video.',
+        type: 'system',
+      });
+    }
   };
 
   // Add Comment or Reply
@@ -963,7 +1003,12 @@ export const HomeTab: React.FC = () => {
             return (
               <article
                 key={post.id}
-                className="rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 p-4 shadow-sm space-y-3 transition-all hover:border-slate-300 dark:hover:border-white/15"
+                id={`post-${post.id}`}
+                className={`rounded-2xl bg-white dark:bg-[#12171F] border p-4 shadow-sm space-y-3 hover:border-slate-300 dark:hover:border-white/15 ${
+                  targetPostId === post.id
+                    ? 'border-[#00E676] ring-2 ring-[#00E676]/40'
+                    : 'border-slate-200/90 dark:border-white/8'
+                }`}
               >
                 {/* Header */}
                 <div className="flex items-start justify-between gap-2">
@@ -1176,7 +1221,16 @@ export const HomeTab: React.FC = () => {
                           {post.durationSeconds ? ` · ${Math.floor(post.durationSeconds / 60)}:${(post.durationSeconds % 60).toString().padStart(2, '0')}` : ''}
                           {post.mediaSizeMb ? ` · ${post.mediaSizeMb} MB` : ''}
                         </span>
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            disabled={downloadingPostId === post.id}
+                            onClick={() => handleDownloadPostVideo(post)}
+                            className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>{downloadingPostId === post.id ? 'Saving...' : 'Download'}</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => openShareSheet({
@@ -1184,19 +1238,20 @@ export const HomeTab: React.FC = () => {
                               targetId: post.id,
                               title: `Match Clip by ${post.author?.name || 'Supporter'}`,
                               text: post.content || 'Watch this football clip on FUTFIELD!',
-                              url: buildShareUrl('/highlights'),
+                              url: buildShareUrl(`/?post=${encodeURIComponent(post.id)}`),
                               previewImage: post.thumbnailUrl,
+                              videoUrl: videoSrc,
                             })}
-                            className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold transition-colors"
+                            className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold"
                           >
-                            Send to Phone
+                            Share
                           </button>
                           <button
                             type="button"
                             onClick={() => setActiveTab('videos')}
-                            className="px-2.5 py-1 rounded-lg bg-[#00E676] hover:bg-[#00c864] text-black font-black transition-colors"
+                            className="px-2.5 py-1 rounded-lg bg-[#00E676] hover:bg-[#00c864] text-black font-black"
                           >
-                            PitchReels
+                            <span>Futfield Tube</span>
                           </button>
                         </div>
                       </div>

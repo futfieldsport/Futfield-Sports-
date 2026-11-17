@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import { haptics } from '../utils/haptics';
 import { saveCachedMatches, getCachedMatches } from '../utils/offlineCache';
@@ -42,12 +42,14 @@ import {
   reactToPostOnServer,
   reactToVideoOnServer,
   shareVideoOnServer,
+  deleteVideoOnServer,
   fetchMediaStorageStats,
   fetchRealtimeAnalytics,
 } from '../services/supabaseClient';
 import { translateText } from '../services/footballAi';
 import { applyRouteSeoMetadata, resolvePathFromAppState } from '../utils/seo';
 import type { SharePayload } from '../utils/share';
+import { scrollToTopInstant } from '../utils/scroll';
 
 export type MainTab = 'home' | 'scores' | 'videos' | 'communities' | 'menu' | 'profile' | 'settings' | 'studio' | 'pricing' | 'support' | 'blog' | 'reviews' | 'share';
 
@@ -63,33 +65,53 @@ export type SupportLegalSection =
   | 'cookies';
 
 const DEFAULT_CREATOR_AVATAR = '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
-const DEFAULT_VIDEO_THUMBNAIL = '/assets/aistudio/IMG-20261102-WA2735_f2548d41.jpg';
+
+export type TubeSubView = 'feed' | 'watch' | 'kicks' | 'upload' | 'fanzone';
 
 export function normalizeVideoItem(raw: any): VideoItem {
   const creatorObj = raw?.creator && typeof raw.creator === 'object' ? raw.creator : {};
   const authorObj = raw?.author && typeof raw.author === 'object' ? raw.author : {};
-  const fallbackHandle = creatorObj.handle || authorObj.handle || (raw?.userId ? `@user_${String(raw.userId).slice(0, 6)}` : '@creator');
+  const fallbackHandle = raw?.fanzoneHandle || creatorObj.handle || authorObj.handle || (raw?.userId ? `@fan_${String(raw.userId).slice(0, 6)}` : '@fanzone');
+  const watchesVal = Number(raw?.watches ?? raw?.views ?? 0);
+  const cheersVal = Number(raw?.cheers ?? raw?.likes ?? 0);
+  const shoutsVal = Number(raw?.shoutsCount ?? raw?.commentsCount ?? 0);
+  const isQuickKick = Boolean(raw?.isQuickKick ?? (raw?.aspectRatio === '9:16' || raw?.videoKind === 'short'));
   return {
     ...raw,
-    id: raw?.id || `v_${Date.now()}`,
+    id: raw?.id || `ft_${Date.now()}`,
     title: raw?.title || 'Matchday Highlight',
     description: raw?.description || '',
     videoUrl: raw?.videoUrl || '',
-    thumbnailUrl: raw?.thumbnailUrl || DEFAULT_VIDEO_THUMBNAIL,
+    thumbnailUrl: raw?.thumbnailUrl || '',
     duration: raw?.duration || '0:30',
-    views: Number(raw?.views) || 0,
-    likes: Number(raw?.likes) || 0,
-    commentsCount: Number(raw?.commentsCount) || 0,
+    durationSeconds: Number(raw?.durationSeconds) || 30,
+    views: watchesVal,
+    watches: watchesVal,
+    likes: cheersVal,
+    cheers: cheersVal,
+    boos: Number(raw?.boos) || 0,
+    commentsCount: shoutsVal,
+    shoutsCount: shoutsVal,
     shares: Number(raw?.shares) || 0,
-    isLiked: Boolean(raw?.isLiked),
+    isLiked: Boolean(raw?.hasCheered ?? raw?.isLiked),
+    hasCheered: Boolean(raw?.hasCheered ?? raw?.isLiked),
+    hasBooed: Boolean(raw?.hasBooed),
     isSaved: Boolean(raw?.isSaved),
+    isQuickKick,
+    tubeCategory: raw?.tubeCategory || (isQuickKick ? 'Quick Kicks' : 'Goals'),
+    boostFirst60: Boolean(raw?.boostFirst60 ?? (Number(raw?.durationSeconds || 30) <= 60)),
+    fanzoneId: raw?.fanzoneId || fallbackHandle,
+    fanzoneName: raw?.fanzoneName || creatorObj.name || authorObj.name || 'FanZone Creator',
+    fanzoneHandle: fallbackHandle,
+    fanzoneAvatar: raw?.fanzoneAvatar || creatorObj.avatar || authorObj.avatar || DEFAULT_CREATOR_AVATAR,
+    squadCount: Number(raw?.squadCount) || 1,
     hashtags: Array.isArray(raw?.hashtags) ? raw.hashtags : [],
     creator: {
-      name: creatorObj.name || authorObj.name || 'Pitch Creator',
+      name: raw?.fanzoneName || creatorObj.name || authorObj.name || 'FanZone Creator',
       handle: fallbackHandle,
-      subscribers: creatorObj.subscribers || '1 supporter',
-      avatar: creatorObj.avatar || authorObj.avatar || DEFAULT_CREATOR_AVATAR,
-      isSubscribed: Boolean(creatorObj.isSubscribed),
+      subscribers: creatorObj.subscribers || `${Number(raw?.squadCount) || 1} Squad`,
+      avatar: raw?.fanzoneAvatar || creatorObj.avatar || authorObj.avatar || DEFAULT_CREATOR_AVATAR,
+      isSubscribed: Boolean(raw?.isConnected ?? creatorObj.isSubscribed),
       isVerified: Boolean(creatorObj.isVerified),
     },
   } as VideoItem;
@@ -254,12 +276,21 @@ interface FootballContextType {
   deleteMatchMessage: (matchId: string, messageId: string, forEveryone?: boolean) => Promise<void>;
   pinMatchMessage: (matchId: string, messageId: string, isPinned: boolean) => Promise<void>;
   
-  // Videos & PitchReels
+  // Futfield Tube & Quick Kicks
   videos: VideoItem[];
   activeVideoIndex: number;
   setActiveVideoIndex: (idx: number) => void;
   latestUploadedVideoId: string | null;
   setLatestUploadedVideoId: (id: string | null) => void;
+  tubeSubView: TubeSubView;
+  setTubeSubView: (view: TubeSubView) => void;
+  tubeWatchVideoId: string | null;
+  setTubeWatchVideoId: (id: string | null) => void;
+  tubeFanZoneHandle: string | null;
+  setTubeFanZoneHandle: (handle: string | null) => void;
+  openFanZone: (usernameOrHandle: string) => void;
+  openTubeUpload: () => void;
+  openQuickKicks: (videoId?: string) => void;
   openVideoInReels: (videoId: string) => void;
   toggleLikeVideo: (videoId: string) => void;
   reactToVideo: (videoId: string, emoji: string) => Promise<void>;
@@ -273,7 +304,9 @@ interface FootballContextType {
     thumbnailUrl?: string;
     clubTag?: string;
     privacy?: 'public' | 'followers' | 'private';
+    visibility?: 'public' | 'squad' | 'private';
     category?: VideoItem['category'];
+    tubeCategory?: string;
     hashtags?: string[];
     duration?: string;
     durationSeconds?: number;
@@ -281,12 +314,14 @@ interface FootballContextType {
     sizeMb?: number;
     videoKind?: 'short' | 'video';
     aspectRatio?: '9:16' | '16:9';
+    isQuickKick?: boolean;
     width?: number;
     height?: number;
     copyrightStatus?: 'CLEAR' | 'WARNING' | 'BLOCKED';
     copyrightReport?: any;
     skipAutoNavigate?: boolean;
   }) => Promise<VideoItem | null>;
+  deleteVideo: (videoId: string) => Promise<boolean>;
   
   // Real-time Analytics & Media MB Storage Stats
   realtimeAnalytics: {
@@ -379,6 +414,8 @@ interface FootballContextType {
   shareModalPayload: SharePayload | null;
   openShareSheet: (payload: SharePayload) => void;
   closeShareSheet: () => void;
+  targetPostId: string | null;
+  setTargetPostId: (id: string | null) => void;
 }
 
 const FootballContext = createContext<FootballContextType | undefined>(undefined);
@@ -459,36 +496,82 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [activeToastNotification, setActiveToastNotification] = useState<AppNotification | null>(null);
 
   const getInitialUrlRoute = () => {
+    const empty = {
+      tab: 'home' as MainTab,
+      support: 'support' as SupportLegalSection,
+      blogSlug: null as string | null,
+      profileId: null as string | null,
+      matchId: null as string | null,
+      videoId: null as string | null,
+      postId: null as string | null,
+      tubeSubView: 'feed' as TubeSubView,
+      fanzoneHandle: null as string | null,
+    };
     if (typeof window === 'undefined') {
-      return { tab: 'home' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null as string | null, profileId: null as string | null, matchId: null as string | null };
+      return empty;
     }
     const rawPath = window.location.pathname || '/';
     const p = rawPath.toLowerCase();
-    if (p === '/live-scores') return { tab: 'scores' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/features') return { tab: 'menu' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/pricing') return { tab: 'pricing' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/terms') return { tab: 'support' as MainTab, support: 'terms' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/privacy') return { tab: 'support' as MainTab, support: 'privacy' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/refund') return { tab: 'support' as MainTab, support: 'refund' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/reviews') return { tab: 'reviews' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/share') return { tab: 'share' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
-    if (p === '/highlights') return { tab: 'videos' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
+    const params = new URLSearchParams(window.location.search);
+    const sharedVideoId = params.get('video')?.trim() || null;
+    const sharedPostId = params.get('post')?.trim() || null;
+
+    if (sharedVideoId) {
+      return { ...empty, tab: 'videos' as MainTab, videoId: sharedVideoId, tubeSubView: 'watch' as TubeSubView };
+    }
+    if (sharedPostId) {
+      return { ...empty, tab: 'home' as MainTab, postId: sharedPostId };
+    }
+    if (p === '/tube' || p === '/tube/') {
+      return { ...empty, tab: 'videos' as MainTab, tubeSubView: 'feed' as TubeSubView };
+    }
+    if (p === '/tube/kicks' || p === '/tube/kicks/') {
+      return { ...empty, tab: 'videos' as MainTab, tubeSubView: 'kicks' as TubeSubView };
+    }
+    if (p === '/tube/upload' || p === '/tube/upload/') {
+      return { ...empty, tab: 'videos' as MainTab, tubeSubView: 'upload' as TubeSubView };
+    }
+    if (p.startsWith('/tube/watch/')) {
+      const vid = decodeURIComponent(rawPath.replace(/^\/tube\/watch\//i, '')).trim() || null;
+      return { ...empty, tab: 'videos' as MainTab, videoId: vid, tubeSubView: 'watch' as TubeSubView };
+    }
+    if (p.startsWith('/videos/') || p.startsWith('/video/')) {
+      const vid = decodeURIComponent(rawPath.replace(/^\/(?:videos|video)\//i, '')).trim() || null;
+      return { ...empty, tab: 'videos' as MainTab, videoId: vid, tubeSubView: 'watch' as TubeSubView };
+    }
+    if (p.startsWith('/fanzone/')) {
+      const fz = decodeURIComponent(rawPath.replace(/^\/fanzone\//i, '')).trim() || null;
+      return { ...empty, tab: 'videos' as MainTab, tubeSubView: 'fanzone' as TubeSubView, fanzoneHandle: fz };
+    }
+    if (p === '/live-scores') return { ...empty, tab: 'scores' as MainTab };
+    if (p.startsWith('/live/')) {
+      const mId = decodeURIComponent(rawPath.replace(/^\/live\//i, '')).trim() || null;
+      return { ...empty, tab: 'scores' as MainTab, matchId: mId };
+    }
+    if (p === '/features') return { ...empty, tab: 'menu' as MainTab };
+    if (p === '/pricing') return { ...empty, tab: 'pricing' as MainTab };
+    if (p === '/terms') return { ...empty, tab: 'support' as MainTab, support: 'terms' as SupportLegalSection };
+    if (p === '/privacy') return { ...empty, tab: 'support' as MainTab, support: 'privacy' as SupportLegalSection };
+    if (p === '/refund') return { ...empty, tab: 'support' as MainTab, support: 'refund' as SupportLegalSection };
+    if (p === '/reviews') return { ...empty, tab: 'reviews' as MainTab };
+    if (p === '/share' || p.startsWith('/join') || p.startsWith('/invite')) return { ...empty, tab: 'share' as MainTab };
+    if (p === '/highlights') return { ...empty, tab: 'videos' as MainTab, tubeSubView: 'feed' as TubeSubView };
     if (p === '/blog' || p.startsWith('/blog/')) {
       const slug = rawPath.replace(/^\/blog\/?/i, '').trim() || null;
-      return { tab: 'blog' as MainTab, support: 'support' as SupportLegalSection, blogSlug: slug, profileId: null, matchId: null };
+      return { ...empty, tab: 'blog' as MainTab, blogSlug: slug };
     }
     if (p.startsWith('/profile/')) {
       const uname = decodeURIComponent(rawPath.replace(/^\/profile\//i, '')).trim() || null;
       if (uname && uname.replace(/^@/, '').toLowerCase() === 'testfan') {
-        return { tab: 'home' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
+        return empty;
       }
-      return { tab: 'profile' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: uname, matchId: null };
+      return { ...empty, tab: 'profile' as MainTab, profileId: uname };
     }
     if (p.startsWith('/match/')) {
       const mId = decodeURIComponent(rawPath.replace(/^\/match\//i, '')).trim() || null;
-      return { tab: 'scores' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: mId };
+      return { ...empty, tab: 'scores' as MainTab, matchId: mId };
     }
-    return { tab: 'home' as MainTab, support: 'support' as SupportLegalSection, blogSlug: null, profileId: null, matchId: null };
+    return empty;
   };
 
   const initialRouteRef = useRef(getInitialUrlRoute());
@@ -498,14 +581,10 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [supportSection, setSupportSection] = useState<SupportLegalSection>(initialRouteRef.current.support);
   const [supportPrefillCategory, setSupportPrefillCategory] = useState<string | null>(null);
   const [viewingProfileUserId, setViewingProfileUserId] = useState<string | null>(initialRouteRef.current.profileId);
-  const [mobileFrameMode, setMobileFrameModeState] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('futfield_mobile_frame');
-      return saved === null ? true : saved === 'true';
-    } catch {
-      return true;
-    }
-  });
+  const [mobileFrameMode, setMobileFrameModeState] = useState<boolean>(false);
+  const [tubeSubView, setTubeSubView] = useState<TubeSubView>(initialRouteRef.current.tubeSubView);
+  const [tubeWatchVideoId, setTubeWatchVideoId] = useState<string | null>(initialRouteRef.current.videoId);
+  const [tubeFanZoneHandle, setTubeFanZoneHandle] = useState<string | null>(initialRouteRef.current.fanzoneHandle);
   const setMobileFrameMode = (val: boolean | ((prev: boolean) => boolean)) => {
     setMobileFrameModeState(prev => {
       const next = typeof val === 'function' ? val(prev) : val;
@@ -518,7 +597,8 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [communities, setCommunities] = useState<Community[]>(INITIAL_COMMUNITIES);
   const [selectedCommunity, setSelectedCommunityState] = useState<Community | null>(null);
   const [shareModalPayload, setShareModalPayload] = useState<SharePayload | null>(null);
-  const [latestUploadedVideoId, setLatestUploadedVideoId] = useState<string | null>(null);
+  const [latestUploadedVideoId, setLatestUploadedVideoId] = useState<string | null>(initialRouteRef.current.videoId);
+  const [targetPostId, setTargetPostId] = useState<string | null>(initialRouteRef.current.postId);
 
   const openShareSheet = useCallback((payload: SharePayload) => {
     haptics.light();
@@ -556,6 +636,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const setActiveTab = (tab: MainTab) => {
+    scrollToTopInstant();
     if (tab !== activeTab) {
       pushCurrentLocationToHistory();
       if (tab !== 'communities') {
@@ -569,6 +650,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const openBlogArticle = (slug?: string | null) => {
+    scrollToTopInstant();
     if (activeTab !== 'blog') {
       pushCurrentLocationToHistory();
       setSelectedCommunityState(null);
@@ -578,6 +660,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const openSupportLegalPage = (section: SupportLegalSection, prefillCategory?: string) => {
+    scrollToTopInstant();
     setSupportSection(section);
     setSupportPrefillCategory(prefillCategory || null);
     if (activeTab !== 'support') {
@@ -588,6 +671,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const setSelectedCommunity = (c: Community | null) => {
+    scrollToTopInstant();
     if (c?.id !== selectedCommunity?.id) {
       pushCurrentLocationToHistory();
       setSelectedCommunityState(c);
@@ -595,6 +679,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const navigateToProfile = (userIdOrHandle?: string) => {
+    scrollToTopInstant();
     const nextProfileId =
       !userIdOrHandle || userIdOrHandle === user.id || userIdOrHandle === user.handle
         ? null
@@ -626,7 +711,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
   
-  // Light Mode & Dark Mode with persistence
+  // Light Mode & Dark Mode with synchronous persistence & color-scheme lock
   const [theme, setThemeState] = useState<'dark' | 'light'>(() => {
     try {
       const saved = localStorage.getItem('futfield_theme');
@@ -636,25 +721,35 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  const applyThemeToDom = useCallback((t: 'dark' | 'light') => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    if (t === 'dark') {
+      root.classList.add('dark');
+      root.style.colorScheme = 'dark';
+      document.body.style.colorScheme = 'dark';
+    } else {
+      root.classList.remove('dark');
+      root.style.colorScheme = 'light';
+      document.body.style.colorScheme = 'light';
+    }
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) {
+      metaTheme.setAttribute('content', t === 'dark' ? '#090D12' : '#F8FAFC');
+    }
+  }, []);
+
   const setTheme = (t: 'dark' | 'light') => {
-    setThemeState(t);
     try {
       localStorage.setItem('futfield_theme', t);
-      if (t === 'dark') {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
     } catch {}
+    applyThemeToDom(t);
+    setThemeState(t);
   };
 
-  useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [theme]);
+  useLayoutEffect(() => {
+    applyThemeToDom(theme);
+  }, [theme, applyThemeToDom]);
 
   const [clubTheme, setClubThemeState] = useState<string>(() => {
     try {
@@ -1158,6 +1253,16 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           } catch {}
         });
 
+        sse.addEventListener('video_deleted', (e: MessageEvent) => {
+          try {
+            const payload = JSON.parse(e.data);
+            if (payload?.videoId) {
+              setVideos(prev => prev.filter(v => v.id !== payload.videoId));
+              setLatestUploadedVideoId(prev => (prev === payload.videoId ? null : prev));
+            }
+          } catch {}
+        });
+
         sse.addEventListener('like_post', (e: MessageEvent) => {
           try {
             const { postId, likesCount } = JSON.parse(e.data);
@@ -1384,15 +1489,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch {}
   }, [videos]);
 
-  // Dark mode class sync with documentElement
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
-  }, [theme]);
+  // Theme DOM synchronization is handled synchronously by applyThemeToDom/useLayoutEffect above
 
   const updateUser = (fields: Partial<UserProfile>) => {
     setUser(prev => {
@@ -1662,6 +1759,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const openMatchRoom = async (match: Match) => {
+    scrollToTopInstant();
     setActiveMatchRoom(match);
     const serverMsgs = await fetchServerMatchMessages(match.id);
     if (serverMsgs && serverMsgs.length > 0) {
@@ -1889,9 +1987,35 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const openVideoInReels = (videoId: string) => {
+    scrollToTopInstant();
     setLatestUploadedVideoId(videoId);
+    setTubeWatchVideoId(videoId);
+    setTubeSubView('watch');
     setActiveVideoIndex(0);
     setActiveTab('videos');
+  };
+
+  const openFanZone = (usernameOrHandle: string) => {
+    scrollToTopInstant();
+    pushCurrentLocationToHistory();
+    setTubeFanZoneHandle(usernameOrHandle);
+    setTubeSubView('fanzone');
+    setActiveTabState('videos');
+  };
+
+  const openTubeUpload = () => {
+    scrollToTopInstant();
+    pushCurrentLocationToHistory();
+    setTubeSubView('upload');
+    setActiveTabState('videos');
+  };
+
+  const openQuickKicks = (videoId?: string) => {
+    scrollToTopInstant();
+    pushCurrentLocationToHistory();
+    if (videoId) setTubeWatchVideoId(videoId);
+    setTubeSubView('kicks');
+    setActiveTabState('videos');
   };
 
   const addVideo = async (data: {
@@ -1901,7 +2025,9 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     thumbnailUrl?: string;
     clubTag?: string;
     privacy?: 'public' | 'followers' | 'private';
+    visibility?: 'public' | 'squad' | 'private';
     category?: VideoItem['category'];
+    tubeCategory?: string;
     hashtags?: string[];
     duration?: string;
     durationSeconds?: number;
@@ -1909,6 +2035,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     sizeMb?: number;
     videoKind?: 'short' | 'video';
     aspectRatio?: '9:16' | '16:9';
+    isQuickKick?: boolean;
     width?: number;
     height?: number;
     copyrightStatus?: 'CLEAR' | 'WARNING' | 'BLOCKED';
@@ -1920,7 +2047,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!limitCheck.allowed) {
       addNotification({
         title: 'Free Tier Limit Reached ⚠️',
-        body: limitCheck.message || 'Daily PitchReels upload limit reached. Upgrade to Pro for unlimited uploads!',
+        body: 'Free limit is 3 uploads/day. Upgrade to Pro for unlimited 1080p Futfield Tube uploads!',
         type: 'system',
       });
       setPricingModalOpen(true);
@@ -1930,28 +2057,41 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const durSec = data.durationSeconds || 30;
     const durFormatted = data.duration || `${Math.floor(durSec / 60)}:${(durSec % 60).toString().padStart(2, '0')}`;
-    const resolvedKind: 'short' | 'video' =
-      data.videoKind || (data.aspectRatio === '16:9' || durSec > 120 ? 'video' : 'short');
-    const resolvedRatio: '9:16' | '16:9' =
-      data.aspectRatio || (resolvedKind === 'video' ? '16:9' : '9:16');
+    const isQuickKick = Boolean(data.isQuickKick ?? (data.videoKind === 'short' || data.aspectRatio === '9:16'));
+    const resolvedKind: 'short' | 'video' = isQuickKick ? 'short' : 'video';
+    const resolvedRatio: '9:16' | '16:9' = isQuickKick ? '9:16' : '16:9';
 
     const newVideo: VideoItem = {
-      id: `v_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `ft_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       userId: user.id,
-      title: data.title,
+      fanzoneId: user.handle,
+      fanzoneName: `${user.name} FanZone`,
+      fanzoneHandle: user.handle,
+      fanzoneAvatar: user.avatar,
+      squadCount: Math.max(1, user.followersCount || 1),
+      title: data.title.trim().slice(0, 80),
       description: data.description,
       videoUrl: data.videoUrl,
-      thumbnailUrl: data.thumbnailUrl || '/assets/aistudio/IMG-20261102-WA2735_f2548d41.jpg',
+      thumbnailUrl: data.thumbnailUrl || '',
       duration: durFormatted,
       durationSeconds: durSec,
-      views: 1,
+      views: 0,
+      watches: 0,
+      cheers: 0,
+      boos: 0,
+      shoutsCount: 0,
       clubTag: data.clubTag,
       privacy: data.privacy || 'public',
-      createdAt: 'Just now',
+      visibility: data.visibility || (data.privacy === 'followers' ? 'squad' : data.privacy || 'public'),
+      tubeCategory: data.tubeCategory || (isQuickKick ? 'Quick Kicks' : 'Goals'),
+      isQuickKick,
+      hasWatermark: !isProUser,
+      boostFirst60: durSec <= 60 || data.tubeCategory === 'Goals',
+      createdAt: new Date().toISOString(),
       creator: {
-        name: user.name,
+        name: `${user.name} FanZone`,
         handle: user.handle,
-        subscribers: '1 supporter',
+        subscribers: `${Math.max(1, user.followersCount || 1)} Squad`,
         avatar: user.avatar,
         isVerified: user.isAuthenticated,
       },
@@ -1970,18 +2110,18 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       height: data.height,
       copyrightStatus: data.copyrightStatus || 'CLEAR',
       copyrightReport: data.copyrightReport,
-      quality: resolvedRatio === '16:9' ? '1080p Widescreen · Pitch Sound ON' : '1080p 9:16 Short · Pitch Sound ON',
+      quality: isProUser ? '1080p' : '720p',
       tacticalSummary: data.description,
       category: data.category || 'foryou',
-      hashtags: data.hashtags || [resolvedKind === 'short' ? '#PitchShorts' : '#PitchVideos', '#FUTFIELD'],
+      hashtags: data.hashtags || [isQuickKick ? '#QuickKicks' : '#FutfieldTube', '#FUTFIELD'],
     };
 
     const serverRes = await uploadServerVideo(newVideo);
     if (!serverRes.success) {
       haptics.warning();
       addNotification({
-        title: 'Video Upload Blocked ⚠️',
-        body: serverRes.error || 'Video failed server duration or copyright validation.',
+        title: 'Clip Upload Blocked ⚠️',
+        body: serverRes.error || 'Clip failed duration or copyright validation.',
         type: 'system',
       });
       return null;
@@ -1992,13 +2132,31 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     setVideos(prev => [finalVideo, ...prev.filter(v => v.id !== finalVideo.id)]);
     setLatestUploadedVideoId(finalVideo.id);
+    setTubeWatchVideoId(finalVideo.id);
     setActiveVideoIndex(0);
     if (!data.skipAutoNavigate) {
+      setTubeSubView(finalVideo.isQuickKick ? 'kicks' : 'watch');
       setActiveTab('videos');
     }
-    addFanPoints(20, resolvedKind === 'short' ? 'Uploaded 9:16 Pitch Short' : 'Uploaded 16:9 Football Video');
+    addFanPoints(20, isQuickKick ? 'Uploaded 9:16 Quick Kick' : 'Uploaded Futfield Tube Clip');
     refreshMediaAndAnalytics().catch(() => {});
     return finalVideo;
+  };
+
+  const deleteVideo = async (videoId: string): Promise<boolean> => {
+    haptics.light();
+    setVideos(prev => prev.filter(v => v.id !== videoId));
+    setLatestUploadedVideoId(prev => (prev === videoId ? null : prev));
+    setTubeWatchVideoId(prev => (prev === videoId ? null : prev));
+    setActiveVideoIndex(0);
+    const ok = await deleteVideoOnServer(videoId);
+    addNotification({
+      title: 'Clip Removed',
+      body: 'Your clip has been deleted from Futfield Tube.',
+      type: 'system',
+    });
+    refreshMediaAndAnalytics().catch(() => {});
+    return ok;
   };
 
   const toggleJoinCommunity = async (communityId: string) => {
@@ -2198,6 +2356,21 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [matches]);
 
+  // Reset scroll to top immediately whenever any feature or route changes
+  useLayoutEffect(() => {
+    scrollToTopInstant();
+  }, [
+    activeTab,
+    supportSection,
+    activeMatchRoom?.id,
+    viewingProfileUserId,
+    activeBlogSlug,
+    tubeSubView,
+    tubeWatchVideoId,
+    tubeFanZoneHandle,
+    selectedCommunity?.id,
+  ]);
+
   // Dynamic Per-Route SEO Metadata + Browser URL Sync
   useEffect(() => {
     applyRouteSeoMetadata({
@@ -2207,6 +2380,9 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       viewingProfileUserId,
       activeBlogSlug,
       matches,
+      tubeSubView,
+      tubeWatchVideoId,
+      tubeFanZoneHandle,
     });
 
     if (typeof window !== 'undefined') {
@@ -2216,6 +2392,9 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         activeMatchRoom,
         viewingProfileUserId,
         activeBlogSlug,
+        tubeSubView,
+        tubeWatchVideoId,
+        tubeFanZoneHandle,
       });
       // Preserve Paystack verification query params when present
       const hasPaymentParams =
@@ -2227,7 +2406,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } catch {}
       }
     }
-  }, [activeTab, supportSection, activeMatchRoom, viewingProfileUserId, activeBlogSlug, matches]);
+  }, [activeTab, supportSection, activeMatchRoom, viewingProfileUserId, activeBlogSlug, matches, tubeSubView, tubeWatchVideoId, tubeFanZoneHandle]);
 
   return (
     <FootballContext.Provider
@@ -2294,6 +2473,15 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setActiveVideoIndex,
         latestUploadedVideoId,
         setLatestUploadedVideoId,
+        tubeSubView,
+        setTubeSubView,
+        tubeWatchVideoId,
+        setTubeWatchVideoId,
+        tubeFanZoneHandle,
+        setTubeFanZoneHandle,
+        openFanZone,
+        openTubeUpload,
+        openQuickKicks,
         openVideoInReels,
         toggleLikeVideo,
         reactToVideo,
@@ -2301,6 +2489,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         toggleSaveVideo,
         toggleSubscribeCreator,
         addVideo,
+        deleteVideo,
         realtimeAnalytics,
         mediaStorageStats,
         refreshMediaAndAnalytics,
@@ -2351,6 +2540,8 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         shareModalPayload,
         openShareSheet,
         closeShareSheet,
+        targetPostId,
+        setTargetPostId,
         showSplash,
         setShowSplash,
         replaySplash,

@@ -42,7 +42,8 @@ function isValidUuid(val: any): boolean {
 
 const portArgIndex = process.argv.indexOf('--port');
 const cliPort = portArgIndex !== -1 ? parseInt(process.argv[portArgIndex + 1], 10) : NaN;
-const PORT = !isNaN(cliPort) ? cliPort : Number(process.env.PORT) || 3000;
+const envPort = Number(process.env.PORT);
+const PORT = !isNaN(cliPort) ? cliPort : envPort && envPort !== 8080 ? envPort : 3000;
 
 // Persistent Local Uploads & Store Directories (Netlify Functions write safely to /tmp)
 const UPLOADS_DIR = IS_SERVERLESS
@@ -120,12 +121,14 @@ if (geminiApiKey) {
   }
 }
 
+let aiFallbackUntil = 0;
+
 async function invokeGeminiSafely(
   prompt: string,
   options?: { responseMimeType?: string; timeoutMs?: number }
 ): Promise<string | null> {
-  if (!aiClient) return null;
-  const timeoutMs = options?.timeoutMs ?? 6000;
+  if (!aiClient || Date.now() < aiFallbackUntil) return null;
+  const timeoutMs = options?.timeoutMs ?? 3500;
   try {
     const aiPromise = aiClient.models.generateContent({
       model: 'gemini-4-hydrogen',
@@ -148,6 +151,7 @@ async function invokeGeminiSafely(
       msg.toLowerCase().includes('failed to list') ||
       msg.toLowerCase().includes('permission denied')
     ) {
+      aiFallbackUntil = Date.now() + 60_000;
       console.warn('[Backend] Gemini key/permission fallback active — serving local tactical engine.');
     } else {
       console.warn('[Backend] AI generation fallback:', msg);
@@ -656,6 +660,29 @@ const inMemoryVideoLikes: { videoId: string; userId: string }[] = [];
 const inMemoryVideoReactions: { videoId: string; userId: string; emoji: string }[] = [];
 const inMemoryVideoComments: any[] = [];
 const inMemoryVideoViews: { videoId: string; userId: string; timestamp?: string }[] = [];
+// FUTFIELD TUBE Persistent Stores (Supabase-backed with disk mirror)
+const inMemoryFutubeConnects: Array<{ fanId: string; fanzoneId: string; alertEnabled: boolean; createdAt: string }> = [];
+const inMemoryFutubeCheers: Array<{ videoId: string; userId: string; createdAt: string }> = [];
+const inMemoryFutubeBoos: Array<{ videoId: string; userId: string; createdAt: string }> = [];
+const inMemoryFutubeShouts: any[] = [];
+const inMemoryFutubeWatchHistory: Array<{
+  userId: string;
+  videoId: string;
+  watchedSeconds: number;
+  countedWatch: boolean;
+  updatedAt: string;
+}> = [];
+const inMemoryFutubePacks: Array<{
+  id: string;
+  userId: string;
+  name: string;
+  videoIds: string[];
+  createdAt: string;
+}> = [];
+const inMemoryFutubeBattles: any[] = [];
+const inMemoryFutubeLiveChats: Record<string, any[]> = {};
+const inMemoryFutubeReports: Array<{ videoId: string; userId: string; reason: string; createdAt: string }> = [];
+const inMemoryFutubeDailyUploads: Record<string, string[]> = {};
 const inMemoryFollows: { followerId: string; followingId: string }[] = [];
 const inMemoryProfiles: Record<string, any> = {};
 const inMemoryCommunities: any[] = [];
@@ -763,6 +790,19 @@ try {
     }
     if (Array.isArray(rawFeed?.postComments)) inMemoryPostComments.push(...rawFeed.postComments);
     if (Array.isArray(rawFeed?.videoComments)) inMemoryVideoComments.push(...rawFeed.videoComments);
+    if (Array.isArray(rawFeed?.futubeConnects)) inMemoryFutubeConnects.push(...rawFeed.futubeConnects);
+    if (Array.isArray(rawFeed?.futubeCheers)) inMemoryFutubeCheers.push(...rawFeed.futubeCheers);
+    if (Array.isArray(rawFeed?.futubeBoos)) inMemoryFutubeBoos.push(...rawFeed.futubeBoos);
+    if (Array.isArray(rawFeed?.futubeShouts)) inMemoryFutubeShouts.push(...rawFeed.futubeShouts);
+    if (Array.isArray(rawFeed?.futubeWatchHistory)) inMemoryFutubeWatchHistory.push(...rawFeed.futubeWatchHistory);
+    if (Array.isArray(rawFeed?.futubePacks)) inMemoryFutubePacks.push(...rawFeed.futubePacks);
+    if (Array.isArray(rawFeed?.futubeBattles)) inMemoryFutubeBattles.push(...rawFeed.futubeBattles);
+    if (rawFeed?.futubeLiveChats && typeof rawFeed.futubeLiveChats === 'object') {
+      Object.assign(inMemoryFutubeLiveChats, rawFeed.futubeLiveChats);
+    }
+    if (rawFeed?.futubeDailyUploads && typeof rawFeed.futubeDailyUploads === 'object') {
+      Object.assign(inMemoryFutubeDailyUploads, rawFeed.futubeDailyUploads);
+    }
     if (rawFeed?.paystackTransactions && typeof rawFeed.paystackTransactions === 'object') {
       Object.assign(paystackTransactions, rawFeed.paystackTransactions);
     }
@@ -794,6 +834,15 @@ function scheduleStorePersist() {
             videos: inMemoryVideos.slice(0, 200),
             postComments: inMemoryPostComments.slice(0, 500),
             videoComments: inMemoryVideoComments.slice(0, 500),
+            futubeConnects: inMemoryFutubeConnects.slice(0, 1000),
+            futubeCheers: inMemoryFutubeCheers.slice(0, 2000),
+            futubeBoos: inMemoryFutubeBoos.slice(0, 1000),
+            futubeShouts: inMemoryFutubeShouts.slice(0, 1000),
+            futubeWatchHistory: inMemoryFutubeWatchHistory.slice(0, 3000),
+            futubePacks: inMemoryFutubePacks.slice(0, 500),
+            futubeBattles: inMemoryFutubeBattles.slice(0, 100),
+            futubeLiveChats: inMemoryFutubeLiveChats,
+            futubeDailyUploads: inMemoryFutubeDailyUploads,
             paystackTransactions,
             activeSubscriptions: activeSubscriptionsStore,
           },
@@ -1404,7 +1453,7 @@ app.get('/api/db/videos', async (req, res) => {
               title: v.title,
               description: v.description || '',
               videoUrl: v.video_url,
-              thumbnailUrl: v.thumbnail_url || DEFAULT_BANNER,
+              thumbnailUrl: v.thumbnail_url || '',
               duration: `${Math.floor(durSec / 60)}:${(durSec % 60).toString().padStart(2, '0')}`,
               durationSeconds: durSec,
               videoKind: durSec > 120 ? 'video' : 'short',
@@ -1541,7 +1590,7 @@ app.post('/api/db/videos', async (req, res) => {
       avatar: video.creator?.avatar || creatorProf?.avatar || DEFAULT_AVATAR,
       isVerified: Boolean(video.creator?.isVerified ?? creatorProf?.isAuthenticated),
     },
-    thumbnailUrl: video.thumbnailUrl || DEFAULT_BANNER,
+    thumbnailUrl: video.thumbnailUrl || '',
     videoKind: resolvedKind,
     aspectRatio: resolvedAspectRatio,
     copyrightStatus: copyrightReport.status,
@@ -1592,8 +1641,21 @@ app.post('/api/db/videos', async (req, res) => {
 app.delete('/api/db/videos/:id', async (req, res) => {
   const { id } = req.params;
   const idx = inMemoryVideos.findIndex(v => v.id === id);
+  const removed = idx !== -1 ? inMemoryVideos[idx] : null;
   if (idx !== -1) {
     inMemoryVideos.splice(idx, 1);
+  }
+  if (removed) {
+    for (const field of [removed.videoUrl, removed.thumbnailUrl]) {
+      if (typeof field === 'string' && field.startsWith('/uploads/')) {
+        try {
+          const targetPath = path.join(UPLOADS_DIR, field.replace(/^\/uploads\//, ''));
+          if (targetPath.startsWith(UPLOADS_DIR) && fs.existsSync(targetPath)) {
+            fs.unlinkSync(targetPath);
+          }
+        } catch {}
+      }
+    }
   }
   if (supabaseBackendClient) {
     try {
@@ -1601,8 +1663,90 @@ app.delete('/api/db/videos/:id', async (req, res) => {
     } catch {}
   }
   scheduleStorePersist();
+  broadcastToGlobalFeed('video_deleted', { videoId: id });
   broadcastToGlobalFeed('analytics_summary', computeRealtimeAnalytics());
   return res.json({ success: true, deletedId: id });
+});
+
+async function streamDownloadResponse(
+  res: express.Response,
+  sourceUrl: string,
+  title: string
+) {
+  const safeBase = String(title || 'futfield_video')
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64) || 'futfield_video';
+
+  if (sourceUrl.startsWith('/uploads/')) {
+    const rel = sourceUrl.replace(/^\/uploads\//, '');
+    const targetPath = path.join(UPLOADS_DIR, rel);
+    if (!targetPath.startsWith(UPLOADS_DIR) || !fs.existsSync(targetPath)) {
+      return res.status(404).json({ error: 'Video file not found on server' });
+    }
+    const ext = path.extname(targetPath) || '.mp4';
+    const contentType =
+      ext.toLowerCase() === '.webm'
+        ? 'video/webm'
+        : ext.toLowerCase() === '.mov'
+        ? 'video/quicktime'
+        : 'video/mp4';
+    const stat = fs.statSync(targetPath);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', String(stat.size));
+    res.setHeader('Content-Disposition', `attachment; filename="${safeBase}${ext}"`);
+    return fs.createReadStream(targetPath).pipe(res);
+  }
+
+  if (/^https?:\/\//i.test(sourceUrl)) {
+    try {
+      const upstream = await fetch(sourceUrl);
+      if (!upstream.ok) {
+        return res.status(upstream.status).json({ error: 'Unable to fetch video file from storage' });
+      }
+      const contentType = upstream.headers.get('content-type') || 'video/mp4';
+      const ext = contentType.includes('webm') ? '.webm' : contentType.includes('quicktime') ? '.mov' : '.mp4';
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', String(buf.length));
+      res.setHeader('Content-Disposition', `attachment; filename="${safeBase}${ext}"`);
+      return res.send(buf);
+    } catch (err: any) {
+      return res.status(502).json({ error: err?.message || 'Download stream failed' });
+    }
+  }
+
+  return res.status(400).json({ error: 'Unsupported video URL for download' });
+}
+
+app.get('/api/db/videos/:id/download', async (req, res) => {
+  const { id } = req.params;
+  let videoRecord = inMemoryVideos.find(v => v.id === id);
+  if (!videoRecord && supabaseBackendClient) {
+    try {
+      const { data } = await supabaseBackendClient
+        .from('videos')
+        .select('id, title, video_url')
+        .eq('id', id)
+        .maybeSingle();
+      if (data?.video_url) {
+        videoRecord = { id: data.id, title: data.title, videoUrl: data.video_url };
+      }
+    } catch {}
+  }
+  if (!videoRecord || !videoRecord.videoUrl) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+  return streamDownloadResponse(res, String(videoRecord.videoUrl), String(videoRecord.title || 'futfield_video'));
+});
+
+app.get('/api/db/media/download', async (req, res) => {
+  const rawUrl = String(req.query.url || '').trim();
+  const title = String(req.query.title || 'futfield_clip').trim();
+  if (!rawUrl) {
+    return res.status(400).json({ error: 'Media url query parameter required' });
+  }
+  return streamDownloadResponse(res, rawUrl, title);
 });
 
 app.post('/api/db/videos/:id/like', async (req, res) => {
@@ -1789,6 +1933,1124 @@ app.post('/api/db/videos/:id/comments', async (req, res) => {
   });
   broadcastToGlobalFeed('analytics_summary', computeRealtimeAnalytics());
   return res.json({ success: true, comment: newComm });
+});
+
+// -------------------------------------------------------------
+// FUTFIELD TUBE Endpoints (/api/futube/*)
+// Non-Copyright Football Video & Quick Kicks Platform
+// -------------------------------------------------------------
+function normalizeFutubeHandle(raw?: string): string {
+  const cleaned = String(raw || '@fanzone').trim();
+  if (!cleaned) return '@fanzone';
+  return cleaned.startsWith('@') ? cleaned.toLowerCase() : `@${cleaned.toLowerCase()}`;
+}
+
+function enrichFutubeVideo(raw: any, viewerId?: string) {
+  if (!raw) return null;
+  const fanzoneHandle = normalizeFutubeHandle(
+    raw.fanzoneHandle || raw.creator?.handle || (raw.userId ? `@fan_${String(raw.userId).slice(0, 6)}` : '@fanzone')
+  );
+  const fanzoneId = raw.fanzoneId || fanzoneHandle;
+  const fanzoneName = raw.fanzoneName || raw.creator?.name || 'FanZone Creator';
+  const fanzoneAvatar = raw.fanzoneAvatar || raw.creator?.avatar || DEFAULT_AVATAR;
+
+  const squadCount = Math.max(
+    1,
+    Number(raw.squadCount || 0),
+    inMemoryFutubeConnects.filter(c => c.fanzoneId === fanzoneId || c.fanzoneId === fanzoneHandle).length
+  );
+  const watches = Number(raw.watches ?? raw.views ?? 0);
+  const cheers = Number(raw.cheers ?? raw.likes ?? 0);
+  const boos = Number(raw.boos ?? 0);
+  const shoutsCount = Math.max(
+    Number(raw.shoutsCount ?? raw.commentsCount ?? 0),
+    inMemoryFutubeShouts.filter(s => s.videoId === raw.id).length
+  );
+
+  const connectRec = viewerId
+    ? inMemoryFutubeConnects.find(
+        c => c.fanId === viewerId && (c.fanzoneId === fanzoneId || c.fanzoneId === fanzoneHandle)
+      )
+    : undefined;
+  const hasCheered = viewerId
+    ? inMemoryFutubeCheers.some(c => c.videoId === raw.id && c.userId === viewerId)
+    : false;
+  const hasBooed = viewerId
+    ? inMemoryFutubeBoos.some(b => b.videoId === raw.id && b.userId === viewerId)
+    : false;
+
+  const durSec = Number(raw.durationSeconds || 30);
+  const isQuickKick = Boolean(raw.isQuickKick ?? (raw.aspectRatio === '9:16' || raw.videoKind === 'short'));
+  const tubeCategory =
+    raw.tubeCategory ||
+    (isQuickKick ? 'Quick Kicks' : raw.clubTag ? 'Premier League' : 'Goals');
+  const boostFirst60 = Boolean(
+    raw.boostFirst60 ?? (tubeCategory.toLowerCase() === 'goals' || durSec <= 60)
+  );
+
+  return {
+    ...raw,
+    fanzoneId,
+    fanzoneName,
+    fanzoneHandle,
+    fanzoneAvatar,
+    fanzoneBio: raw.fanzoneBio || `Official ${raw.clubTag || 'Football'} FanZone on Futfield Tube ⚽`,
+    squadCount,
+    watches,
+    views: watches,
+    cheers,
+    likes: cheers,
+    boos,
+    shoutsCount,
+    commentsCount: shoutsCount,
+    hasCheered,
+    isLiked: hasCheered,
+    hasBooed,
+    isConnected: Boolean(connectRec),
+    alertEnabled: connectRec ? Boolean(connectRec.alertEnabled) : false,
+    isQuickKick,
+    tubeCategory,
+    boostFirst60,
+    visibility: raw.visibility || (raw.privacy === 'followers' ? 'squad' : raw.privacy || 'public'),
+    quality: raw.quality || (raw.hasWatermark === false ? '1080p' : '720p'),
+    hasWatermark: raw.hasWatermark !== undefined ? Boolean(raw.hasWatermark) : false,
+    creator: {
+      ...(raw.creator || {}),
+      name: fanzoneName,
+      handle: fanzoneHandle,
+      avatar: fanzoneAvatar,
+      subscribers: `${squadCount} Squad`,
+      isSubscribed: Boolean(connectRec),
+    },
+  };
+}
+
+function buildAutoCaptionsForVideo(video: any): Array<{ startSec: number; endSec: number; english: string; pidgin: string }> {
+  const title = String(video?.title || 'Matchday Moment').trim();
+  const club = String(video?.clubTag || 'the squad').trim();
+  const dur = Math.max(12, Math.min(180, Number(video?.durationSeconds || 36)));
+  const templates = [
+    {
+      english: `Watch ${club} build up fast right here — "${title}".`,
+      pidgin: `See as ${club} dey move ball sharp sharp — "${title}"!`,
+    },
+    {
+      english: `Look at that tight space control and quick switch on the flank!`,
+      pidgin: `Chai! Check how dem control am for corner, no waste time!`,
+    },
+    {
+      english: `Unbelievable vision — the FanZone crowd is going wild right now!`,
+      pidgin: `Omo! Dis pass sweet die, whole FanZone don scatter with cheer!`,
+    },
+    {
+      english: `Drop your Cheer 🔥 and Shout your match rating below!`,
+      pidgin: `Press Cheer 🔥 fast fast make you drop your Shout for comment!`,
+    },
+  ];
+  const seg = Math.max(3, Math.floor(dur / templates.length));
+  return templates.map((t, i) => ({
+    startSec: i * seg,
+    endSec: i === templates.length - 1 ? dur : (i + 1) * seg,
+    english: t.english,
+    pidgin: t.pidgin,
+  }));
+}
+
+app.get('/api/futube/videos', async (req, res) => {
+  const category = String(req.query.category || 'All').trim();
+  const search = String(req.query.search || '').trim().toLowerCase();
+  const sort = String(req.query.sort || 'goals_boost').trim();
+  const userId = String(req.query.userId || '').trim();
+  const fanzone = String(req.query.fanzone || '').trim();
+  const offset = Math.max(0, Number(req.query.offset || 0));
+  const limit = Math.max(1, Math.min(50, Number(req.query.limit || 24)));
+
+  const mergedMap = new Map<string, any>();
+  for (const v of inMemoryVideos) {
+    if (v?.id) mergedMap.set(v.id, v);
+  }
+
+  if (supabaseBackendClient) {
+    try {
+      const { data, error } = await supabaseBackendClient
+        .from('futube_videos')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (!error && Array.isArray(data)) {
+        for (const row of data) {
+          if (!mergedMap.has(row.id)) {
+            const durSec = Number(row.duration_seconds || 30);
+            mergedMap.set(row.id, {
+              id: row.id,
+              userId: row.user_id,
+              fanzoneId: row.fanzone_id,
+              title: row.title,
+              description: row.description || '',
+              videoUrl: row.video_url,
+              thumbnailUrl: row.thumbnail_url || '',
+              tubeCategory: row.category || 'Goals',
+              hashtags: Array.isArray(row.tags) ? row.tags : [],
+              watches: row.watches || 0,
+              views: row.watches || 0,
+              cheers: row.cheers || 0,
+              likes: row.cheers || 0,
+              boos: row.boos || 0,
+              shoutsCount: row.shouts_count || 0,
+              shares: row.shares || 0,
+              visibility: row.visibility || 'public',
+              isQuickKick: Boolean(row.is_quick_kick),
+              isMatchLive: Boolean(row.is_match_live),
+              duration: row.duration || '0:30',
+              durationSeconds: durSec,
+              quality: row.quality || '720p',
+              hasWatermark: Boolean(row.has_watermark),
+              boostFirst60: Boolean(row.boost_first_60),
+              aspectRatio: row.is_quick_kick ? '9:16' : '16:9',
+              videoKind: row.is_quick_kick ? 'short' : 'video',
+              createdAt: row.created_at,
+            });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  let items = Array.from(mergedMap.values())
+    .map(v => enrichFutubeVideo(v, userId || undefined))
+    .filter((v): v is NonNullable<typeof v> => Boolean(v));
+
+  // Enforce Private visibility (creator-only)
+  items = items.filter(v => {
+    if (v.visibility === 'private') {
+      return userId && v.userId === userId;
+    }
+    return true;
+  });
+
+  if (fanzone) {
+    const targetFz = normalizeFutubeHandle(fanzone);
+    items = items.filter(
+      v => v.fanzoneHandle === targetFz || String(v.fanzoneId).toLowerCase() === fanzone.toLowerCase()
+    );
+  }
+
+  if (category && category !== 'All') {
+    if (category === 'Quick Kicks') {
+      items = items.filter(v => v.isQuickKick);
+    } else if (category === 'Match Live') {
+      items = items.filter(v => v.isMatchLive);
+    } else if (category === 'On Fire') {
+      items = [...items].sort((a, b) => (b.cheers * 4 + b.watches * 2) - (a.cheers * 4 + a.watches * 2));
+    } else {
+      const catLower = category.toLowerCase();
+      items = items.filter(
+        v =>
+          String(v.tubeCategory || '').toLowerCase() === catLower ||
+          String(v.clubTag || '').toLowerCase().includes(catLower) ||
+          (Array.isArray(v.hashtags) && v.hashtags.some((t: string) => t.toLowerCase().includes(catLower.replace(/\s+/g, ''))))
+      );
+    }
+  }
+
+  if (search) {
+    items = items.filter(v => {
+      const hay = [
+        v.title,
+        v.description,
+        v.clubTag,
+        v.fanzoneName,
+        v.fanzoneHandle,
+        v.tubeCategory,
+        ...(Array.isArray(v.hashtags) ? v.hashtags : []),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(search);
+    });
+  }
+
+  if (sort === 'on_fire' || category === 'On Fire') {
+    items.sort((a, b) => (b.cheers * 4 + b.watches * 2 + b.shoutsCount * 3) - (a.cheers * 4 + a.watches * 2 + a.shoutsCount * 3));
+  } else if (sort === 'newest') {
+    items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  } else {
+    // Football-only algorithm: Boost goals & clips <= 60s
+    items.sort((a, b) => {
+      const aGoalBoost = (a.boostFirst60 ? 500 : 0) + (String(a.tubeCategory).toLowerCase() === 'goals' ? 300 : 0);
+      const bGoalBoost = (b.boostFirst60 ? 500 : 0) + (String(b.tubeCategory).toLowerCase() === 'goals' ? 300 : 0);
+      const aScore = aGoalBoost + a.cheers * 3 + a.watches;
+      const bScore = bGoalBoost + b.cheers * 3 + b.watches;
+      if (bScore !== aScore) return bScore - aScore;
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+  }
+
+  const total = items.length;
+  const paged = items.slice(offset, offset + limit);
+  return res.json({
+    success: true,
+    videos: paged,
+    total,
+    hasMore: offset + paged.length < total,
+  });
+});
+
+app.get('/api/futube/videos/:id', (req, res) => {
+  const { id } = req.params;
+  const userId = String(req.query.userId || '').trim();
+  const raw = inMemoryVideos.find(v => v.id === id);
+  if (!raw) {
+    return res.status(404).json({ success: false, error: 'Clip not found' });
+  }
+  const enriched = enrichFutubeVideo(raw, userId || undefined);
+  const upNext = inMemoryVideos
+    .filter(v => v.id !== id && v.visibility !== 'private')
+    .map(v => enrichFutubeVideo(v, userId || undefined))
+    .filter(Boolean)
+    .slice(0, 10);
+
+  return res.json({
+    success: true,
+    video: enriched,
+    upNext,
+  });
+});
+
+app.post('/api/futube/videos', async (req, res) => {
+  const payload = req.body?.video || req.body || {};
+  const userId = String(payload.userId || 'guest_user');
+  if (!payload.videoUrl) {
+    return res.status(400).json({ success: false, error: 'Video URL is required' });
+  }
+  if (String(payload.videoUrl).startsWith('blob:')) {
+    return res.status(400).json({ success: false, error: 'Upload video to futfield-videos storage first' });
+  }
+
+  const cleanTitle = String(payload.title || 'Matchday Clip').trim().slice(0, 80);
+  if (!cleanTitle) {
+    return res.status(400).json({ success: false, error: 'Clip title (max 80 chars) required' });
+  }
+
+  const durSec = Math.max(1, Math.round(Number(payload.durationSeconds || 30)));
+  const isQuickKick = Boolean(payload.isQuickKick || payload.aspectRatio === '9:16' || payload.videoKind === 'short');
+  if (isQuickKick && durSec > 60) {
+    return res.status(400).json({
+      success: false,
+      error: `Quick Kicks (vertical 9:16) cannot exceed 60 seconds. Received ${durSec}s.`,
+    });
+  }
+
+  // Enforce Pro (unlimited, 1080p, no watermark) vs Free (3/day, 720p, Futfield watermark)
+  const isPro = Boolean(payload.isPro || activeSubscriptionsStore[userId]);
+  const todayKey = `${userId}_${new Date().toISOString().slice(0, 10)}`;
+  const todaysUploads = inMemoryFutubeDailyUploads[todayKey] || [];
+  if (!isPro && todaysUploads.length >= 3) {
+    return res.status(429).json({
+      success: false,
+      limitReached: true,
+      error: 'Free limit reached (3 clips/day). Upgrade to Pro for unlimited 1080p watermark-free uploads!',
+    });
+  }
+
+  let diskBuffer: Buffer | null = null;
+  if (String(payload.videoUrl).startsWith('/uploads/')) {
+    const candidate = path.join(UPLOADS_DIR, String(payload.videoUrl).replace(/^\/uploads\//, ''));
+    if (fs.existsSync(candidate)) {
+      try {
+        diskBuffer = fs.readFileSync(candidate);
+      } catch {}
+    }
+  }
+
+  const copyrightReport = analyzeVideoCopyright({
+    buffer: diskBuffer,
+    fileName: String(payload.videoUrl || ''),
+    title: cleanTitle,
+    description: String(payload.description || ''),
+    videoUrl: String(payload.videoUrl || ''),
+    hashtags: Array.isArray(payload.hashtags) ? payload.hashtags : [],
+    clubTag: String(payload.clubTag || ''),
+  });
+
+  if (copyrightReport.status === 'BLOCKED') {
+    return res.status(403).json({
+      success: false,
+      copyrightStatus: 'BLOCKED',
+      copyrightReport,
+      error: copyrightReport.reason || 'Protected broadcast blocked by MediaGuard.',
+    });
+  }
+
+  const newId = payload.id || `ft_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const fanzoneHandle = normalizeFutubeHandle(payload.fanzoneHandle || payload.creator?.handle || `@fan_${userId.slice(0, 6)}`);
+  const fanzoneName = payload.fanzoneName || payload.creator?.name || 'FanZone Creator';
+  const fanzoneAvatar = payload.fanzoneAvatar || payload.creator?.avatar || DEFAULT_AVATAR;
+  const tubeCategory = isQuickKick ? 'Quick Kicks' : String(payload.tubeCategory || payload.category || 'Goals');
+  const boostFirst60 = tubeCategory.toLowerCase() === 'goals' || durSec <= 60;
+  const visibility: 'public' | 'squad' | 'private' =
+    payload.visibility === 'squad' || payload.visibility === 'private' ? payload.visibility : 'public';
+
+  const fullClip = {
+    id: newId,
+    userId,
+    fanzoneId: payload.fanzoneId || fanzoneHandle,
+    fanzoneName,
+    fanzoneHandle,
+    fanzoneAvatar,
+    fanzoneBio: payload.fanzoneBio || `Official ${payload.clubTag || 'Football'} FanZone on Futfield Tube`,
+    title: cleanTitle,
+    description: String(payload.description || ''),
+    videoUrl: String(payload.videoUrl),
+    thumbnailUrl: String(payload.thumbnailUrl || ''),
+    tubeCategory,
+    category: isQuickKick ? 'playlists' : 'highlights',
+    hashtags: Array.isArray(payload.hashtags) ? payload.hashtags : ['#FutfieldTube', '#Football'],
+    duration: payload.duration || `${Math.floor(durSec / 60)}:${(durSec % 60).toString().padStart(2, '0')}`,
+    durationSeconds: durSec,
+    videoKind: isQuickKick ? 'short' : 'video',
+    aspectRatio: isQuickKick ? '9:16' : '16:9',
+    isQuickKick,
+    isMatchLive: Boolean(payload.isMatchLive),
+    visibility,
+    privacy: visibility === 'squad' ? 'followers' : visibility,
+    clubTag: String(payload.clubTag || ''),
+    watches: 0,
+    views: 0,
+    cheers: 0,
+    likes: 0,
+    boos: 0,
+    shoutsCount: 0,
+    commentsCount: 0,
+    shares: 0,
+    quality: isPro ? '1080p' : '720p',
+    hasWatermark: !isPro,
+    boostFirst60,
+    sizeBytes: payload.sizeBytes,
+    sizeMb: payload.sizeMb,
+    copyrightStatus: copyrightReport.status,
+    copyrightReport,
+    creator: {
+      name: fanzoneName,
+      handle: fanzoneHandle,
+      avatar: fanzoneAvatar,
+      subscribers: '1 Squad',
+      isVerified: Boolean(payload.creator?.isVerified),
+    },
+    createdAt: new Date().toISOString(),
+  };
+
+  inMemoryVideos.unshift(fullClip);
+  inMemoryFutubeDailyUploads[todayKey] = [...todaysUploads, newId];
+
+  if (supabaseBackendClient) {
+    try {
+      await supabaseBackendClient.from('futube_videos').insert({
+        id: newId,
+        user_id: userId,
+        fanzone_id: fullClip.fanzoneId,
+        title: cleanTitle,
+        description: fullClip.description,
+        video_url: fullClip.videoUrl,
+        thumbnail_url: fullClip.thumbnailUrl,
+        category: tubeCategory,
+        tags: fullClip.hashtags,
+        watches: 0,
+        cheers: 0,
+        boos: 0,
+        shouts_count: 0,
+        shares: 0,
+        visibility,
+        is_quick_kick: isQuickKick,
+        is_match_live: fullClip.isMatchLive,
+        duration: fullClip.duration,
+        duration_seconds: durSec,
+        quality: fullClip.quality,
+        has_watermark: fullClip.hasWatermark,
+        boost_first_60: boostFirst60,
+        created_at: fullClip.createdAt,
+      });
+    } catch {}
+  }
+
+  scheduleStorePersist();
+  const enriched = enrichFutubeVideo(fullClip, userId);
+  broadcastToGlobalFeed('new_video', enriched);
+  broadcastToGlobalFeed('analytics_summary', computeRealtimeAnalytics());
+  return res.json({
+    success: true,
+    video: enriched,
+    remainingToday: isPro ? 'unlimited' : Math.max(0, 3 - inMemoryFutubeDailyUploads[todayKey].length),
+  });
+});
+
+app.delete('/api/futube/videos/:id', async (req, res) => {
+  const { id } = req.params;
+  const idx = inMemoryVideos.findIndex(v => v.id === id);
+  const removed = idx !== -1 ? inMemoryVideos[idx] : null;
+  if (idx !== -1) inMemoryVideos.splice(idx, 1);
+
+  if (removed) {
+    for (const field of [removed.videoUrl, removed.thumbnailUrl]) {
+      if (typeof field === 'string' && field.startsWith('/uploads/')) {
+        try {
+          const targetPath = path.join(UPLOADS_DIR, field.replace(/^\/uploads\//, ''));
+          if (targetPath.startsWith(UPLOADS_DIR) && fs.existsSync(targetPath)) {
+            fs.unlinkSync(targetPath);
+          }
+        } catch {}
+      }
+    }
+  }
+  if (supabaseBackendClient) {
+    try {
+      await supabaseBackendClient.from('futube_videos').delete().eq('id', id);
+    } catch {}
+  }
+  scheduleStorePersist();
+  broadcastToGlobalFeed('video_deleted', { videoId: id });
+  return res.json({ success: true, deletedId: id });
+});
+
+// Increment watches strictly at >= 5 seconds of real viewing (anti-fake-view protection)
+app.post('/api/futube/videos/:id/watch', async (req, res) => {
+  const { id } = req.params;
+  const userId = String(req.body?.userId || 'anon_viewer');
+  const watchedSeconds = Math.max(0, Math.round(Number(req.body?.watchedSeconds || 0)));
+
+  let v = inMemoryVideos.find(item => item.id === id);
+  if (!v) {
+    return res.status(404).json({ success: false, error: 'Clip not found' });
+  }
+
+  let historyRec = inMemoryFutubeWatchHistory.find(h => h.videoId === id && h.userId === userId);
+  if (!historyRec) {
+    historyRec = {
+      userId,
+      videoId: id,
+      watchedSeconds: 0,
+      countedWatch: false,
+      updatedAt: new Date().toISOString(),
+    };
+    inMemoryFutubeWatchHistory.push(historyRec);
+  }
+  historyRec.watchedSeconds = Math.max(historyRec.watchedSeconds, watchedSeconds);
+  historyRec.updatedAt = new Date().toISOString();
+
+  let counted = false;
+  if (watchedSeconds >= 5 && !historyRec.countedWatch) {
+    historyRec.countedWatch = true;
+    v.watches = Number(v.watches ?? v.views ?? 0) + 1;
+    v.views = v.watches;
+    counted = true;
+
+    if (supabaseBackendClient) {
+      try {
+        await supabaseBackendClient.from('futube_watch_history').upsert({
+          user_id: userId,
+          video_id: id,
+          watched_seconds: historyRec.watchedSeconds,
+          counted_watch: true,
+          updated_at: historyRec.updatedAt,
+        });
+        await supabaseBackendClient
+          .from('futube_videos')
+          .update({ watches: v.watches })
+          .eq('id', id);
+      } catch {}
+    }
+
+    broadcastToGlobalFeed('video_engagement_updated', {
+      videoId: id,
+      watches: v.watches,
+      views: v.watches,
+      cheers: v.cheers ?? v.likes ?? 0,
+      likes: v.cheers ?? v.likes ?? 0,
+      shares: v.shares || 0,
+      shoutsCount: v.shoutsCount ?? v.commentsCount ?? 0,
+      commentsCount: v.shoutsCount ?? v.commentsCount ?? 0,
+    });
+  }
+
+  scheduleStorePersist();
+  return res.json({
+    success: true,
+    counted,
+    watchedSeconds: historyRec.watchedSeconds,
+    watches: Number(v.watches ?? v.views ?? 0),
+  });
+});
+
+app.post('/api/futube/videos/:id/cheer', async (req, res) => {
+  const { id } = req.params;
+  const userId = String(req.body?.userId || 'guest_user');
+  const v = inMemoryVideos.find(item => item.id === id);
+  if (!v) return res.status(404).json({ success: false, error: 'Clip not found' });
+
+  const idx = inMemoryFutubeCheers.findIndex(c => c.videoId === id && c.userId === userId);
+  let hasCheered = false;
+  if (idx !== -1) {
+    inMemoryFutubeCheers.splice(idx, 1);
+    v.cheers = Math.max(0, Number(v.cheers ?? v.likes ?? 0) - 1);
+  } else {
+    inMemoryFutubeCheers.push({ videoId: id, userId, createdAt: new Date().toISOString() });
+    v.cheers = Number(v.cheers ?? v.likes ?? 0) + 1;
+    hasCheered = true;
+    // Remove boo if switching from Boo to Cheer
+    const booIdx = inMemoryFutubeBoos.findIndex(b => b.videoId === id && b.userId === userId);
+    if (booIdx !== -1) {
+      inMemoryFutubeBoos.splice(booIdx, 1);
+      v.boos = Math.max(0, Number(v.boos || 0) - 1);
+    }
+  }
+  v.likes = v.cheers;
+
+  if (supabaseBackendClient) {
+    try {
+      if (hasCheered) {
+        await supabaseBackendClient.from('futube_cheers').upsert({ video_id: id, user_id: userId });
+      } else {
+        await supabaseBackendClient.from('futube_cheers').delete().eq('video_id', id).eq('user_id', userId);
+      }
+      await supabaseBackendClient.from('futube_videos').update({ cheers: v.cheers, boos: v.boos || 0 }).eq('id', id);
+    } catch {}
+  }
+
+  scheduleStorePersist();
+  broadcastToGlobalFeed('video_engagement_updated', {
+    videoId: id,
+    watches: v.watches ?? v.views ?? 0,
+    views: v.watches ?? v.views ?? 0,
+    cheers: v.cheers,
+    likes: v.cheers,
+    boos: v.boos || 0,
+    shares: v.shares || 0,
+    shoutsCount: v.shoutsCount ?? v.commentsCount ?? 0,
+    commentsCount: v.shoutsCount ?? v.commentsCount ?? 0,
+  });
+  return res.json({ success: true, hasCheered, cheers: v.cheers, boos: v.boos || 0 });
+});
+
+app.post('/api/futube/videos/:id/boo', (req, res) => {
+  const { id } = req.params;
+  const userId = String(req.body?.userId || 'guest_user');
+  const v = inMemoryVideos.find(item => item.id === id);
+  if (!v) return res.status(404).json({ success: false, error: 'Clip not found' });
+
+  const idx = inMemoryFutubeBoos.findIndex(b => b.videoId === id && b.userId === userId);
+  let hasBooed = false;
+  if (idx !== -1) {
+    inMemoryFutubeBoos.splice(idx, 1);
+    v.boos = Math.max(0, Number(v.boos || 0) - 1);
+  } else {
+    inMemoryFutubeBoos.push({ videoId: id, userId, createdAt: new Date().toISOString() });
+    v.boos = Number(v.boos || 0) + 1;
+    hasBooed = true;
+    const cheerIdx = inMemoryFutubeCheers.findIndex(c => c.videoId === id && c.userId === userId);
+    if (cheerIdx !== -1) {
+      inMemoryFutubeCheers.splice(cheerIdx, 1);
+      v.cheers = Math.max(0, Number(v.cheers ?? v.likes ?? 0) - 1);
+      v.likes = v.cheers;
+    }
+  }
+  scheduleStorePersist();
+  return res.json({ success: true, hasBooed, boos: v.boos, cheers: v.cheers ?? v.likes ?? 0 });
+});
+
+app.post('/api/futube/videos/:id/report', (req, res) => {
+  const { id } = req.params;
+  const userId = String(req.body?.userId || 'guest_user');
+  const reason = String(req.body?.reason || 'Inappropriate or non-football content').trim();
+  inMemoryFutubeReports.unshift({
+    videoId: id,
+    userId,
+    reason,
+    createdAt: new Date().toISOString(),
+  });
+  return res.json({ success: true, reported: true });
+});
+
+app.get('/api/futube/videos/:id/shouts', (req, res) => {
+  const { id } = req.params;
+  const sort = String(req.query.sort || 'newest');
+  const userId = String(req.query.userId || '');
+
+  const allForVideo = inMemoryFutubeShouts.filter(s => s.videoId === id);
+  const topLevel = allForVideo.filter(s => !s.parentId).map(s => {
+    const replies = allForVideo
+      .filter(r => r.parentId === s.id)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .map(r => ({
+        ...r,
+        hasCheered: userId ? Array.isArray(r.cheerUserIds) && r.cheerUserIds.includes(userId) : false,
+      }));
+    return {
+      ...s,
+      hasCheered: userId ? Array.isArray(s.cheerUserIds) && s.cheerUserIds.includes(userId) : false,
+      replies,
+    };
+  });
+
+  if (sort === 'top_cheers') {
+    topLevel.sort((a, b) => (Number(b.cheers || 0) - Number(a.cheers || 0)) || (new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+  } else {
+    topLevel.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  return res.json({ success: true, shouts: topLevel, totalCount: allForVideo.length });
+});
+
+app.post('/api/futube/videos/:id/shouts', async (req, res) => {
+  const { id } = req.params;
+  const { userId = 'guest_user', authorName = 'Supporter', authorHandle = '@fan', authorAvatar = DEFAULT_AVATAR, text, parentId = null } = req.body || {};
+  if (!text || !String(text).trim()) {
+    return res.status(400).json({ success: false, error: 'Shout text is required' });
+  }
+
+  const shout = {
+    id: `sh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    videoId: id,
+    userId,
+    authorName,
+    authorHandle: normalizeFutubeHandle(authorHandle),
+    authorAvatar: authorAvatar || DEFAULT_AVATAR,
+    text: String(text).trim(),
+    parentId: parentId || null,
+    cheers: 0,
+    cheerUserIds: [] as string[],
+    createdAt: new Date().toISOString(),
+  };
+
+  inMemoryFutubeShouts.unshift(shout);
+  const v = inMemoryVideos.find(item => item.id === id);
+  if (v) {
+    v.shoutsCount = inMemoryFutubeShouts.filter(s => s.videoId === id).length;
+    v.commentsCount = v.shoutsCount;
+  }
+
+  if (supabaseBackendClient) {
+    try {
+      await supabaseBackendClient.from('futube_shouts').insert({
+        id: shout.id,
+        video_id: id,
+        user_id: userId,
+        author_name: authorName,
+        author_handle: shout.authorHandle,
+        author_avatar: shout.authorAvatar,
+        text: shout.text,
+        parent_id: parentId,
+        cheers: 0,
+        created_at: shout.createdAt,
+      });
+    } catch {}
+  }
+
+  scheduleStorePersist();
+  return res.json({ success: true, shout: { ...shout, replies: [] }, shoutsCount: v?.shoutsCount || 1 });
+});
+
+app.post('/api/futube/shouts/:shoutId/cheer', (req, res) => {
+  const { shoutId } = req.params;
+  const userId = String(req.body?.userId || 'guest_user');
+  const shout = inMemoryFutubeShouts.find(s => s.id === shoutId);
+  if (!shout) return res.status(404).json({ success: false, error: 'Shout not found' });
+
+  if (!Array.isArray(shout.cheerUserIds)) shout.cheerUserIds = [];
+  const idx = shout.cheerUserIds.indexOf(userId);
+  let hasCheered = false;
+  if (idx !== -1) {
+    shout.cheerUserIds.splice(idx, 1);
+    shout.cheers = Math.max(0, Number(shout.cheers || 0) - 1);
+  } else {
+    shout.cheerUserIds.push(userId);
+    shout.cheers = Number(shout.cheers || 0) + 1;
+    hasCheered = true;
+  }
+  scheduleStorePersist();
+  return res.json({ success: true, hasCheered, cheers: shout.cheers });
+});
+
+app.post('/api/futube/connects/toggle', async (req, res) => {
+  const fanId = String(req.body?.fanId || req.body?.userId || 'guest_user');
+  const fanzoneId = normalizeFutubeHandle(req.body?.fanzoneId || req.body?.handle);
+
+  const idx = inMemoryFutubeConnects.findIndex(c => c.fanId === fanId && c.fanzoneId === fanzoneId);
+  let isConnected = false;
+  let alertEnabled = false;
+  if (idx !== -1) {
+    inMemoryFutubeConnects.splice(idx, 1);
+  } else {
+    inMemoryFutubeConnects.push({
+      fanId,
+      fanzoneId,
+      alertEnabled: true,
+      createdAt: new Date().toISOString(),
+    });
+    isConnected = true;
+    alertEnabled = true;
+  }
+
+  const squadCount = Math.max(
+    1,
+    inMemoryFutubeConnects.filter(c => c.fanzoneId === fanzoneId).length
+  );
+  for (const v of inMemoryVideos) {
+    if (normalizeFutubeHandle(v.fanzoneHandle || v.creator?.handle) === fanzoneId || v.fanzoneId === fanzoneId) {
+      v.squadCount = squadCount;
+      if (v.creator) v.creator.subscribers = `${squadCount} Squad`;
+    }
+  }
+
+  if (supabaseBackendClient) {
+    try {
+      if (isConnected) {
+        await supabaseBackendClient.from('futube_connects').upsert({
+          fan_id: fanId,
+          fanzone_id: fanzoneId,
+          alert_enabled: true,
+        });
+      } else {
+        await supabaseBackendClient.from('futube_connects').delete().eq('fan_id', fanId).eq('fanzone_id', fanzoneId);
+      }
+    } catch {}
+  }
+
+  scheduleStorePersist();
+  return res.json({ success: true, isConnected, alertEnabled, squadCount, fanzoneId });
+});
+
+app.post('/api/futube/connects/alert', (req, res) => {
+  const fanId = String(req.body?.fanId || req.body?.userId || 'guest_user');
+  const fanzoneId = normalizeFutubeHandle(req.body?.fanzoneId || req.body?.handle);
+  let rec = inMemoryFutubeConnects.find(c => c.fanId === fanId && c.fanzoneId === fanzoneId);
+  if (!rec) {
+    rec = { fanId, fanzoneId, alertEnabled: true, createdAt: new Date().toISOString() };
+    inMemoryFutubeConnects.push(rec);
+  } else {
+    rec.alertEnabled = !rec.alertEnabled;
+  }
+  scheduleStorePersist();
+  return res.json({ success: true, alertEnabled: rec.alertEnabled, isConnected: true });
+});
+
+app.get('/api/futube/fanzone/:username', (req, res) => {
+  const rawUser = decodeURIComponent(req.params.username || '').trim();
+  const handle = normalizeFutubeHandle(rawUser);
+  const viewerId = String(req.query.userId || '');
+
+  const prof =
+    inMemoryProfiles[handle] ||
+    inMemoryProfiles[rawUser] ||
+    Object.values(inMemoryProfiles).find(
+      p => normalizeFutubeHandle(p?.handle) === handle || String(p?.id).toLowerCase() === rawUser.toLowerCase()
+    );
+
+  const matchingVideos = inMemoryVideos
+    .filter(
+      v =>
+        normalizeFutubeHandle(v.fanzoneHandle || v.creator?.handle) === handle ||
+        String(v.fanzoneId || '').toLowerCase() === rawUser.toLowerCase() ||
+        String(v.userId || '').toLowerCase() === rawUser.toLowerCase()
+    )
+    .map(v => enrichFutubeVideo(v, viewerId || undefined))
+    .filter((v): v is NonNullable<typeof v> => Boolean(v));
+
+  const firstVid = matchingVideos[0];
+  const squadCount = Math.max(
+    inMemoryFutubeConnects.filter(c => c.fanzoneId === handle).length,
+    Number(firstVid?.squadCount || 0),
+    Number(prof?.followersCount || 0)
+  );
+  const totalWatches = matchingVideos.reduce((acc, v) => acc + Number(v.watches || 0), 0);
+  const connectRec = viewerId
+    ? inMemoryFutubeConnects.find(c => c.fanId === viewerId && c.fanzoneId === handle)
+    : undefined;
+
+  const clips = matchingVideos.filter(v => !v.isQuickKick);
+  const quickKicks = matchingVideos.filter(v => v.isQuickKick);
+  const packs = inMemoryFutubePacks.filter(
+    p => p.userId === prof?.id || normalizeFutubeHandle(p.userId) === handle
+  );
+
+  return res.json({
+    success: true,
+    fanzone: {
+      id: prof?.id || handle,
+      username: handle.replace(/^@/, ''),
+      handle,
+      name: prof?.name || firstVid?.fanzoneName || `${handle.replace(/^@/, '')} FanZone`,
+      avatar: prof?.avatar || firstVid?.fanzoneAvatar || DEFAULT_AVATAR,
+      bannerUrl:
+        firstVid?.fanzoneBanner ||
+        '/assets/aistudio/futfield_stadium_hero_banner.png',
+      bio:
+        prof?.bio ||
+        firstVid?.fanzoneBio ||
+        'Gunners for life — Matchday reactions, tactical breakdowns & Quick Kicks on Futfield Tube ⚡',
+      favoriteClub: prof?.favoriteClub || firstVid?.clubTag || 'Arsenal',
+      squadCount,
+      clipsCount: matchingVideos.length,
+      quickKicksCount: quickKicks.length,
+      totalWatches,
+      isConnected: Boolean(connectRec),
+      alertEnabled: connectRec ? Boolean(connectRec.alertEnabled) : false,
+      clips,
+      quickKicks,
+      packs,
+    },
+  });
+});
+
+app.get('/api/futube/packs', (req, res) => {
+  const userId = String(req.query.userId || 'guest_user');
+  const packs = inMemoryFutubePacks.filter(p => p.userId === userId);
+  return res.json({ success: true, packs });
+});
+
+app.post('/api/futube/packs/save', async (req, res) => {
+  const { userId = 'guest_user', videoId, packName = 'Matchday Favorites' } = req.body || {};
+  if (!videoId) return res.status(400).json({ success: false, error: 'videoId required' });
+
+  let pack = inMemoryFutubePacks.find(
+    p => p.userId === userId && p.name.toLowerCase() === String(packName).trim().toLowerCase()
+  );
+  if (!pack) {
+    pack = {
+      id: `pack_${Date.now()}`,
+      userId,
+      name: String(packName).trim() || 'Matchday Pack',
+      videoIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    inMemoryFutubePacks.unshift(pack);
+  }
+  if (!pack.videoIds.includes(videoId)) {
+    pack.videoIds.push(videoId);
+  }
+
+  if (supabaseBackendClient) {
+    try {
+      await supabaseBackendClient.from('futube_matchday_packs').upsert({
+        id: pack.id,
+        user_id: pack.userId,
+        name: pack.name,
+        video_ids: pack.videoIds,
+      });
+    } catch {}
+  }
+
+  scheduleStorePersist();
+  return res.json({ success: true, pack });
+});
+
+app.get('/api/futube/captions/:videoId', (req, res) => {
+  const { videoId } = req.params;
+  const v = inMemoryVideos.find(item => item.id === videoId);
+  const cues = buildAutoCaptionsForVideo(v || { title: 'Matchday Highlight', durationSeconds: 30 });
+  return res.json({ success: true, videoId, cues });
+});
+
+app.get('/api/futube/battles', (req, res) => {
+  const userId = String(req.query.userId || '');
+  // Auto-compose a live FanZone battle if user clips exist and none created manually yet
+  let list = [...inMemoryFutubeBattles];
+  if (list.length === 0 && inMemoryVideos.length >= 2) {
+    const v1 = enrichFutubeVideo(inMemoryVideos[0], userId);
+    const v2 = enrichFutubeVideo(inMemoryVideos[1], userId);
+    if (v1 && v2) {
+      list = [
+        {
+          id: `battle_auto_${v1.id}_${v2.id}`,
+          title: `${v1.fanzoneName} vs ${v2.fanzoneName} — Goal of the Week Battle`,
+          category: 'Goals',
+          status: 'LIVE',
+          createdAt: new Date().toISOString(),
+          leftSide: {
+            fanzoneName: v1.fanzoneName,
+            fanzoneHandle: v1.fanzoneHandle,
+            fanzoneAvatar: v1.fanzoneAvatar,
+            videoId: v1.id,
+            videoTitle: v1.title,
+            thumbnailUrl: v1.thumbnailUrl,
+            videoUrl: v1.videoUrl,
+            votes: 0,
+          },
+          rightSide: {
+            fanzoneName: v2.fanzoneName,
+            fanzoneHandle: v2.fanzoneHandle,
+            fanzoneAvatar: v2.fanzoneAvatar,
+            videoId: v2.id,
+            videoTitle: v2.title,
+            thumbnailUrl: v2.thumbnailUrl,
+            videoUrl: v2.videoUrl,
+            votes: 0,
+          },
+          voterMap: {},
+        },
+      ];
+    }
+  }
+
+  const formatted = list.map(b => ({
+    ...b,
+    userVotedSide: userId && b.voterMap ? b.voterMap[userId] || null : null,
+  }));
+  return res.json({ success: true, battles: formatted });
+});
+
+app.post('/api/futube/battles', (req, res) => {
+  const { title, leftVideoId, rightVideoId } = req.body || {};
+  const v1 = enrichFutubeVideo(inMemoryVideos.find(v => v.id === leftVideoId));
+  const v2 = enrichFutubeVideo(inMemoryVideos.find(v => v.id === rightVideoId));
+  if (!v1 || !v2) {
+    return res.status(400).json({ success: false, error: 'Select two uploaded clips to start a FanZone Battle.' });
+  }
+  const battle = {
+    id: `battle_${Date.now()}`,
+    title: String(title || `${v1.fanzoneName} vs ${v2.fanzoneName}`).trim().slice(0, 80),
+    category: 'FanZone Battle',
+    status: 'LIVE',
+    createdAt: new Date().toISOString(),
+    leftSide: {
+      fanzoneName: v1.fanzoneName,
+      fanzoneHandle: v1.fanzoneHandle,
+      fanzoneAvatar: v1.fanzoneAvatar,
+      videoId: v1.id,
+      videoTitle: v1.title,
+      thumbnailUrl: v1.thumbnailUrl,
+      videoUrl: v1.videoUrl,
+      votes: 0,
+    },
+    rightSide: {
+      fanzoneName: v2.fanzoneName,
+      fanzoneHandle: v2.fanzoneHandle,
+      fanzoneAvatar: v2.fanzoneAvatar,
+      videoId: v2.id,
+      videoTitle: v2.title,
+      thumbnailUrl: v2.thumbnailUrl,
+      videoUrl: v2.videoUrl,
+      votes: 0,
+    },
+    voterMap: {} as Record<string, 'left' | 'right'>,
+  };
+  inMemoryFutubeBattles.unshift(battle);
+  scheduleStorePersist();
+  return res.json({ success: true, battle });
+});
+
+app.post('/api/futube/battles/:id/vote', (req, res) => {
+  const { id } = req.params;
+  const { userId = 'guest_user', side } = req.body || {};
+  if (side !== 'left' && side !== 'right') {
+    return res.status(400).json({ success: false, error: 'side must be left or right' });
+  }
+
+  let battle = inMemoryFutubeBattles.find(b => b.id === id);
+  if (!battle && id.startsWith('battle_auto_') && inMemoryVideos.length >= 2) {
+    const v1 = enrichFutubeVideo(inMemoryVideos[0]);
+    const v2 = enrichFutubeVideo(inMemoryVideos[1]);
+    if (v1 && v2) {
+      battle = {
+        id,
+        title: `${v1.fanzoneName} vs ${v2.fanzoneName} — Goal of the Week Battle`,
+        category: 'Goals',
+        status: 'LIVE',
+        createdAt: new Date().toISOString(),
+        leftSide: {
+          fanzoneName: v1.fanzoneName,
+          fanzoneHandle: v1.fanzoneHandle,
+          fanzoneAvatar: v1.fanzoneAvatar,
+          videoId: v1.id,
+          videoTitle: v1.title,
+          thumbnailUrl: v1.thumbnailUrl,
+          videoUrl: v1.videoUrl,
+          votes: 0,
+        },
+        rightSide: {
+          fanzoneName: v2.fanzoneName,
+          fanzoneHandle: v2.fanzoneHandle,
+          fanzoneAvatar: v2.fanzoneAvatar,
+          videoId: v2.id,
+          videoTitle: v2.title,
+          thumbnailUrl: v2.thumbnailUrl,
+          videoUrl: v2.videoUrl,
+          votes: 0,
+        },
+        voterMap: {},
+      };
+      inMemoryFutubeBattles.unshift(battle);
+    }
+  }
+  if (!battle) return res.status(404).json({ success: false, error: 'Battle not found' });
+
+  if (!battle.voterMap) battle.voterMap = {};
+  const prevVote = battle.voterMap[userId];
+  if (prevVote === 'left') battle.leftSide.votes = Math.max(0, battle.leftSide.votes - 1);
+  if (prevVote === 'right') battle.rightSide.votes = Math.max(0, battle.rightSide.votes - 1);
+
+  battle.voterMap[userId] = side;
+  if (side === 'left') battle.leftSide.votes += 1;
+  else battle.rightSide.votes += 1;
+
+  scheduleStorePersist();
+  return res.json({ success: true, battle: { ...battle, userVotedSide: side } });
+});
+
+app.get('/api/futube/live-chat/:videoId', (req, res) => {
+  const { videoId } = req.params;
+  const userId = String(req.query.userId || '');
+  const v = inMemoryVideos.find(item => item.id === videoId);
+  const fanzoneId = normalizeFutubeHandle(v?.fanzoneHandle || v?.creator?.handle);
+  const isSquadMember =
+    !v ||
+    (userId &&
+      (v.userId === userId ||
+        inMemoryFutubeConnects.some(c => c.fanId === userId && c.fanzoneId === fanzoneId)));
+
+  return res.json({
+    success: true,
+    isSquadMember: Boolean(isSquadMember),
+    fanzoneId,
+    messages: isSquadMember ? (inMemoryFutubeLiveChats[videoId] || []) : [],
+  });
+});
+
+app.post('/api/futube/live-chat/:videoId', (req, res) => {
+  const { videoId } = req.params;
+  const { userId = 'guest_user', userName = 'Supporter', userAvatar = DEFAULT_AVATAR, text } = req.body || {};
+  if (!text || !String(text).trim()) {
+    return res.status(400).json({ success: false, error: 'Message text required' });
+  }
+  const v = inMemoryVideos.find(item => item.id === videoId);
+  const fanzoneId = normalizeFutubeHandle(v?.fanzoneHandle || v?.creator?.handle);
+  const isSquadMember =
+    !v ||
+    v.userId === userId ||
+    inMemoryFutubeConnects.some(c => c.fanId === userId && c.fanzoneId === fanzoneId);
+
+  if (!isSquadMember) {
+    return res.status(403).json({
+      success: false,
+      squadRequired: true,
+      error: 'Squad-Only Match Live Chat: Click Connect ⚡ to join this FanZone Squad first!',
+    });
+  }
+
+  if (!inMemoryFutubeLiveChats[videoId]) inMemoryFutubeLiveChats[videoId] = [];
+  const msg = {
+    id: `lc_${Date.now()}`,
+    userId,
+    userName,
+    userAvatar,
+    text: String(text).trim(),
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  };
+  inMemoryFutubeLiveChats[videoId].push(msg);
+  if (inMemoryFutubeLiveChats[videoId].length > 200) {
+    inMemoryFutubeLiveChats[videoId] = inMemoryFutubeLiveChats[videoId].slice(-200);
+  }
+  scheduleStorePersist();
+  return res.json({ success: true, message: msg });
 });
 
 // -------------------------------------------------------------
@@ -2058,7 +3320,11 @@ function resolveMediaFolderAndKind(bucket: string, mimeType: string): { folder: 
   if (isAudio) {
     return { folder: 'voices', mediaKind: 'audio' };
   }
-  const isVideo = lowerMime.startsWith('video/') || lowerBucket === 'videos' || lowerBucket === 'post-videos';
+  const isVideo =
+    lowerMime.startsWith('video/') ||
+    lowerBucket === 'videos' ||
+    lowerBucket === 'post-videos' ||
+    lowerBucket === 'futfield-videos';
   if (isVideo) {
     return { folder: 'videos', mediaKind: 'video' };
   }
@@ -2085,6 +3351,7 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
     }
 
     const bucket = String(req.headers['x-bucket'] || 'post-images');
+    const isFutubeBucket = bucket === 'futfield-videos';
     const mimeType = String(req.headers['x-file-type'] || req.headers['content-type'] || 'application/octet-stream');
     let rawName = 'upload';
     try {
@@ -2107,7 +3374,9 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
 
     const { folder, mediaKind } = resolveMediaFolderAndKind(bucket, mimeType);
 
-    // Enforce strict 9:16 Shorts (<=2m) vs 16:9 Videos (<=3m) & Copyright Guard for all video uploads
+    const maxShortSec = isFutubeBucket ? 60 : 120;
+    const maxVideoSec = isFutubeBucket ? 3600 : 180;
+
     let detectedVideoKind: 'short' | 'video' | undefined;
     let detectedAspectRatio: '9:16' | '16:9' | undefined;
     let copyrightReport: any = null;
@@ -2118,37 +3387,37 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
         if (ratio <= 0.85) {
           detectedVideoKind = 'short';
           detectedAspectRatio = '9:16';
-        } else if (ratio >= 1.25) {
+        } else if (ratio >= 1.15 || isFutubeBucket) {
           detectedVideoKind = 'video';
           detectedAspectRatio = '16:9';
         } else {
           return res.status(400).json({
             success: false,
             status: 'ERROR',
-            error: `Unsupported video dimensions (${widthHeader}x${heightHeader}). Upload a 9:16 Short (≤ 2 min) or a 16:9 Video (≤ 3 min).`,
+            error: `Unsupported video dimensions (${widthHeader}x${heightHeader}). Upload a 9:16 Quick Kick (≤ ${maxShortSec}s) or a 16:9 Clip.`,
           });
         }
       } else if (requestedKind === 'video' || requestedAspect === '16:9') {
         detectedVideoKind = 'video';
         detectedAspectRatio = '16:9';
       } else {
-        detectedVideoKind = durationSecondsHeader > 120 ? 'video' : 'short';
+        detectedVideoKind = durationSecondsHeader > maxShortSec ? 'video' : 'short';
         detectedAspectRatio = detectedVideoKind === 'video' ? '16:9' : '9:16';
       }
 
-      if (detectedVideoKind === 'short' && durationSecondsHeader > 120) {
+      if (detectedVideoKind === 'short' && durationSecondsHeader > maxShortSec) {
         return res.status(400).json({
           success: false,
           status: 'ERROR',
-          error: `9:16 PitchReels Shorts must be 2 minutes (120s) or less. Received ${durationSecondsHeader}s.`,
+          error: `Quick Kicks (vertical 9:16) must be ${maxShortSec}s or less. Received ${durationSecondsHeader}s.`,
         });
       }
 
-      if (detectedVideoKind === 'video' && durationSecondsHeader > 180) {
+      if (detectedVideoKind === 'video' && durationSecondsHeader > maxVideoSec) {
         return res.status(400).json({
           success: false,
           status: 'ERROR',
-          error: `16:9 Football Videos must be 3 minutes (180s) or less. Received ${durationSecondsHeader}s.`,
+          error: `Football Clips cannot exceed ${Math.round(maxVideoSec / 60)} minutes. Received ${durationSecondsHeader}s.`,
         });
       }
 
@@ -2182,9 +3451,17 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
 
     if (supabaseBackendClient && supabaseUrl) {
       try {
-        const { data, error } = await supabaseBackendClient.storage
+        let { data, error } = await supabaseBackendClient.storage
           .from(bucket)
           .upload(safeName, buffer, { contentType: mimeType });
+        if (error && isFutubeBucket) {
+          await supabaseBackendClient.storage.createBucket(bucket, { public: true }).catch(() => {});
+          const retry = await supabaseBackendClient.storage
+            .from(bucket)
+            .upload(safeName, buffer, { contentType: mimeType });
+          data = retry.data;
+          error = retry.error;
+        }
         if (!error && data?.path) {
           finalUrl = `${supabaseUrl}/storage/v1/object/public/${bucket}/${data.path}`;
         }
@@ -2287,8 +3564,8 @@ app.post('/api/media/copyright-registry', (req, res) => {
   }
 });
 
-app.post('/api/media/upload', express.raw({ type: '*/*', limit: '200mb' }), handleBinaryMediaUpload);
-app.post('/api/db/upload-binary', express.raw({ type: '*/*', limit: '200mb' }), handleBinaryMediaUpload);
+app.post('/api/media/upload', express.raw({ type: '*/*', limit: '500mb' }), handleBinaryMediaUpload);
+app.post('/api/db/upload-binary', express.raw({ type: '*/*', limit: '500mb' }), handleBinaryMediaUpload);
 
 app.post('/api/db/upload', async (req, res) => {
   const { fileData, fileName, bucket = 'post-images', userId = 'user' } = req.body;
@@ -3112,7 +4389,9 @@ app.get('/api/db/supabase-config', (req, res) => {
 
 // AI Match Prediction Endpoint (Form analysis, Win probability, Head-to-Head)
 app.post('/api/ai/match-prediction', async (req, res) => {
-  const { homeTeam, awayTeam, league, homeScore, awayScore } = req.body;
+  const homeTeam = req.body?.homeTeam || req.body?.home;
+  const awayTeam = req.body?.awayTeam || req.body?.away;
+  const { league, homeScore, awayScore } = req.body || {};
   if (!homeTeam || !awayTeam) {
     return res.status(400).json({ error: 'homeTeam and awayTeam required' });
   }
@@ -3349,7 +4628,20 @@ Output strictly valid JSON with this schema:
 // Additional Server-Side Football AI & Phone Share Endpoints
 // -------------------------------------------------------------
 app.post('/api/ai/match-recap', async (req, res) => {
-  const { match } = req.body || {};
+  const rawMatch = req.body?.match;
+  const match = rawMatch && rawMatch.homeTeam && rawMatch.awayTeam
+    ? rawMatch
+    : req.body?.home && req.body?.away
+    ? {
+        homeTeam: { name: String(req.body.home), score: Number(String(req.body.score || '0-0').split('-')[0]) || 0 },
+        awayTeam: { name: String(req.body.away), score: Number(String(req.body.score || '0-0').split('-')[1]) || 0 },
+        league: req.body.league || 'League',
+        venue: req.body.venue || 'the stadium',
+        status: req.body.status || 'FT',
+        events: req.body.events || [],
+        stats: req.body.stats || { possession: [50, 50], shots: [6, 5] },
+      }
+    : null;
   if (!match || !match.homeTeam || !match.awayTeam) {
     return res.status(400).json({ success: false, error: 'Match details required' });
   }

@@ -343,7 +343,7 @@ export const SettingsPage: React.FC = () => {
   ];
 
   return (
-    <div className="pb-28 max-w-4xl mx-auto px-3 sm:px-4 pt-3 space-y-4 text-slate-900 dark:text-white transition-colors">
+    <div className="pb-28 max-w-4xl mx-auto px-3 sm:px-4 pt-3 space-y-4 text-slate-900 dark:text-white">
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-white/10">
         <div className="flex items-center gap-3">
@@ -972,21 +972,21 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* 9:16 Stagnant App Crop Lock */}
+              {/* Full-Screen Standalone Layout */}
               <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200/70 dark:border-white/5 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-xl bg-slate-200 dark:bg-white/5 text-[#00E676]">
                     <Smartphone className="w-5 h-5" />
                   </div>
                   <div>
-                    <div className="text-xs font-bold text-slate-900 dark:text-white">9:16 Stagnant App Crop</div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-white">Full-Screen Standalone View</div>
                     <div className="text-[11px] text-slate-500 dark:text-white/50">
-                      Locked 9:16 portrait arena viewport (active across all screens)
+                      Edge-to-edge responsive layout across mobile and desktop
                     </div>
                   </div>
                 </div>
                 <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-[#00E676] text-[11px] font-bold border border-[#00E676]/30 shrink-0">
-                  9:16 Locked
+                  Full Screen
                 </span>
               </div>
             </div>

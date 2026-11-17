@@ -56,6 +56,7 @@ export type StorageBucket =
   | 'post-images'
   | 'post-videos'
   | 'videos'
+  | 'futfield-videos'
   | 'video-thumbnails'
   | 'avatars'
   | 'match-chat-images'
@@ -70,17 +71,20 @@ export function formatBytesToMb(bytes: number): number {
 export function classifyVideoDimensionsAndDuration(
   duration: number,
   width: number,
-  height: number
+  height: number,
+  mode: 'standard' | 'futube' = 'standard'
 ): VideoInspectionMetadata {
   const safeDuration = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0;
+  const maxQuickKickSeconds = mode === 'futube' ? 60 : 120;
+  const maxLandscapeSeconds = mode === 'futube' ? 3600 : 180;
 
   if (width > 0 && height > 0) {
     const ratio = width / height;
-    // Vertical / Portrait (~9:16)
+    // Vertical / Portrait (~9:16 Quick Kick)
     if (ratio <= 0.85) {
       const validationError =
-        safeDuration > 120
-          ? `9:16 PitchReels Shorts must be 2 minutes (120s) or less. Detected ${safeDuration}s.`
+        safeDuration > maxQuickKickSeconds
+          ? `Quick Kicks (vertical 9:16) must be ${maxQuickKickSeconds}s or less. Detected ${safeDuration}s.`
           : undefined;
       return {
         duration: safeDuration,
@@ -95,10 +99,10 @@ export function classifyVideoDimensionsAndDuration(
     }
 
     // Widescreen / Landscape (~16:9)
-    if (ratio >= 1.25) {
+    if (ratio >= 1.15 || mode === 'futube') {
       const validationError =
-        safeDuration > 180
-          ? `16:9 Football Videos must be 3 minutes (180s) or less. Detected ${safeDuration}s.`
+        safeDuration > maxLandscapeSeconds
+          ? `16:9 Football Clips cannot exceed ${Math.round(maxLandscapeSeconds / 60)} minutes. Detected ${safeDuration}s.`
           : undefined;
       return {
         duration: safeDuration,
@@ -120,12 +124,12 @@ export function classifyVideoDimensionsAndDuration(
       isLandscape169: false,
       videoKind: 'unsupported',
       detectedAspectRatio: 'unsupported',
-      validationError: `Unsupported aspect ratio (${width}x${height}). Upload a 9:16 Vertical Short (≤ 2 min) or a 16:9 Widescreen Video (≤ 3 min).`,
+      validationError: `Unsupported aspect ratio (${width}x${height}). Upload a 9:16 Vertical Quick Kick (≤ ${maxQuickKickSeconds}s) or a 16:9 Widescreen Clip.`,
     };
   }
 
-  // Fallback when codec metadata isn't readable by browser (e.g., some headless/webm streams)
-  if (safeDuration > 180) {
+  // Fallback when codec metadata isn't readable by browser
+  if (safeDuration > maxLandscapeSeconds) {
     return {
       duration: safeDuration,
       width: 0,
@@ -138,7 +142,7 @@ export function classifyVideoDimensionsAndDuration(
     };
   }
 
-  const inferredKind = safeDuration > 120 ? 'video' : 'short';
+  const inferredKind = safeDuration > maxQuickKickSeconds ? 'video' : 'short';
   const inferredRatio = inferredKind === 'video' ? '16:9' : '9:16';
   return {
     duration: safeDuration,
@@ -152,9 +156,12 @@ export function classifyVideoDimensionsAndDuration(
 }
 
 /**
- * Inspect duration & dimensions locally and auto-detect 9:16 Short (<=120s) vs 16:9 Video (<=180s).
+ * Inspect duration & dimensions locally and auto-detect 9:16 Quick Kick (<=60s in futube) vs 16:9 Video.
  */
-export function inspectVideoMetadata(videoFile: File): Promise<VideoInspectionMetadata> {
+export function inspectVideoMetadata(
+  videoFile: File,
+  mode: 'standard' | 'futube' = 'standard'
+): Promise<VideoInspectionMetadata> {
   return new Promise((resolve) => {
     const video = document.createElement('video');
     const objectUrl = URL.createObjectURL(videoFile);
@@ -170,7 +177,7 @@ export function inspectVideoMetadata(videoFile: File): Promise<VideoInspectionMe
 
     const timer = setTimeout(() => {
       cleanup();
-      resolve(classifyVideoDimensionsAndDuration(0, 0, 0));
+      resolve(classifyVideoDimensionsAndDuration(0, 0, 0, mode));
     }, 4500);
 
     video.onloadedmetadata = () => {
@@ -179,20 +186,19 @@ export function inspectVideoMetadata(videoFile: File): Promise<VideoInspectionMe
       const width = video.videoWidth || 0;
       const height = video.videoHeight || 0;
       cleanup();
-      resolve(classifyVideoDimensionsAndDuration(duration, width, height));
+      resolve(classifyVideoDimensionsAndDuration(duration, width, height, mode));
     };
 
     video.onerror = () => {
       clearTimeout(timer);
       cleanup();
-      resolve(classifyVideoDimensionsAndDuration(0, 0, 0));
+      resolve(classifyVideoDimensionsAndDuration(0, 0, 0, mode));
     };
   });
 }
 
 /**
  * Capture a crisp JPEG poster frame from an uploaded Video File on an offscreen canvas.
- * Prevents uploaded clips from showing blank players or generic stock banners.
  */
 export function captureVideoPosterFrame(videoFile: File): Promise<Blob | null> {
   return new Promise((resolve) => {
@@ -229,9 +235,7 @@ export function captureVideoPosterFrame(videoFile: File): Promise<Blob | null> {
           : 0.25;
       try {
         video.currentTime = targetTime;
-      } catch {
-        // Fallback if seek throws
-      }
+      } catch {}
     };
 
     const grabFrame = () => {
@@ -254,11 +258,7 @@ export function captureVideoPosterFrame(videoFile: File): Promise<Blob | null> {
       }
       try {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob(
-          (blob) => finish(blob),
-          'image/jpeg',
-          0.84
-        );
+        canvas.toBlob((blob) => finish(blob), 'image/jpeg', 0.84);
       } catch {
         finish(null);
       }
@@ -280,10 +280,269 @@ export function captureVideoPosterFrame(videoFile: File): Promise<Blob | null> {
   });
 }
 
+/**
+ * Auto-generate 3 crisp JPEG thumbnails sampled at ~15%, ~45%, and ~75% of the video.
+ */
+export function captureThreeVideoThumbnails(videoFile: File): Promise<Blob[]> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve([]);
+      return;
+    }
+    const video = document.createElement('video');
+    const objectUrl = URL.createObjectURL(videoFile);
+    const blobs: Blob[] = [];
+    const fractions = [0.15, 0.45, 0.75];
+    let step = 0;
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        URL.revokeObjectURL(objectUrl);
+      } catch {}
+      resolve(blobs);
+    };
+
+    const overallTimer = setTimeout(finish, 9000);
+
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = objectUrl;
+
+    const seekNext = () => {
+      if (step >= fractions.length) {
+        clearTimeout(overallTimer);
+        finish();
+        return;
+      }
+      const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 4;
+      const t = Math.max(0.1, Math.min(dur - 0.1, dur * fractions[step]));
+      try {
+        video.currentTime = t;
+      } catch {
+        clearTimeout(overallTimer);
+        finish();
+      }
+    };
+
+    video.onloadedmetadata = () => {
+      seekNext();
+    };
+
+    video.onseeked = () => {
+      const vw = video.videoWidth || 640;
+      const vh = video.videoHeight || 360;
+      const scale = Math.min(1, 720 / Math.max(vw, vh));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(180, Math.round(vw * scale));
+      canvas.height = Math.max(180, Math.round(vh * scale));
+      const ctx = canvas.getContext('2d');
+      if (ctx && vw > 0 && vh > 0) {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(
+            (b) => {
+              if (b) blobs.push(b);
+              step += 1;
+              seekNext();
+            },
+            'image/jpeg',
+            0.82
+          );
+          return;
+        } catch {}
+      }
+      step += 1;
+      seekNext();
+    };
+
+    video.onerror = () => {
+      clearTimeout(overallTimer);
+      finish();
+    };
+  });
+}
+
+/**
+ * Compress a video file in the browser using Canvas + MediaRecorder downscaled to 720p (Free) or 1080p (Pro).
+ * Falls back cleanly to original file if unsupported, larger than original, or timed out.
+ */
+export async function compressVideoInBrowser(
+  file: File,
+  maxHeight: 720 | 1080 = 720,
+  onProgress?: (pct: number) => void
+): Promise<{ file: File; compressed: boolean; originalBytes: number; finalBytes: number }> {
+  const originalBytes = file.size;
+  if (
+    typeof document === 'undefined' ||
+    typeof MediaRecorder === 'undefined' ||
+    originalBytes < 1.5 * 1024 * 1024
+  ) {
+    onProgress?.(100);
+    return { file, compressed: false, originalBytes, finalBytes: originalBytes };
+  }
+
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    const objectUrl = URL.createObjectURL(file);
+    let settled = false;
+
+    const cleanup = () => {
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        URL.revokeObjectURL(objectUrl);
+      } catch {}
+    };
+
+    const fallbackOriginal = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      onProgress?.(100);
+      resolve({ file, compressed: false, originalBytes, finalBytes: originalBytes });
+    };
+
+    // Guard against slow headless codecs hanging the UI
+    const safetyTimer = setTimeout(fallbackOriginal, 18000);
+
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.src = objectUrl;
+
+    video.onloadedmetadata = () => {
+      const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+      const vw = video.videoWidth || 1280;
+      const vh = video.videoHeight || 720;
+      // Only compress reasonably short browser-transcodable clips (< 90s)
+      if (!dur || dur > 90 || vh <= 0 || vw <= 0) {
+        clearTimeout(safetyTimer);
+        fallbackOriginal();
+        return;
+      }
+
+      const scale = vh > maxHeight ? maxHeight / vh : 1;
+      const outW = Math.max(320, Math.round((vw * scale) / 2) * 2);
+      const outH = Math.max(240, Math.round((vh * scale) / 2) * 2);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx || typeof canvas.captureStream !== 'function') {
+        clearTimeout(safetyTimer);
+        fallbackOriginal();
+        return;
+      }
+
+      const mimeCandidate = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+        ? 'video/webm;codecs=vp8'
+        : MediaRecorder.isTypeSupported('video/webm')
+        ? 'video/webm'
+        : '';
+
+      if (!mimeCandidate) {
+        clearTimeout(safetyTimer);
+        fallbackOriginal();
+        return;
+      }
+
+      try {
+        const stream = canvas.captureStream(24);
+        const targetBitrate = maxHeight === 1080 ? 2_200_000 : 1_100_000;
+        const recorder = new MediaRecorder(stream, {
+          mimeType: mimeCandidate,
+          videoBitsPerSecond: targetBitrate,
+        });
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = (ev) => {
+          if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+        };
+        recorder.onstop = () => {
+          clearTimeout(safetyTimer);
+          if (settled) return;
+          settled = true;
+          cleanup();
+          const outBlob = new Blob(chunks, { type: 'video/webm' });
+          if (outBlob.size > 0 && outBlob.size < originalBytes) {
+            const outFile = new File(
+              [outBlob],
+              file.name.replace(/\.[^.]+$/, '') + '.webm',
+              { type: 'video/webm' }
+            );
+            onProgress?.(100);
+            resolve({
+              file: outFile,
+              compressed: true,
+              originalBytes,
+              finalBytes: outFile.size,
+            });
+          } else {
+            onProgress?.(100);
+            resolve({ file, compressed: false, originalBytes, finalBytes: originalBytes });
+          }
+        };
+
+        let rafId = 0;
+        const drawLoop = () => {
+          if (video.paused || video.ended || settled) {
+            cancelAnimationFrame(rafId);
+            return;
+          }
+          ctx.drawImage(video, 0, 0, outW, outH);
+          if (dur > 0) {
+            onProgress?.(Math.min(96, Math.round((video.currentTime / dur) * 100)));
+          }
+          rafId = requestAnimationFrame(drawLoop);
+        };
+
+        video.onended = () => {
+          cancelAnimationFrame(rafId);
+          if (recorder.state === 'recording') recorder.stop();
+        };
+
+        recorder.start(250);
+        video.playbackRate = 1.5;
+        video
+          .play()
+          .then(() => {
+            rafId = requestAnimationFrame(drawLoop);
+          })
+          .catch(() => {
+            clearTimeout(safetyTimer);
+            if (recorder.state === 'recording') recorder.stop();
+            fallbackOriginal();
+          });
+      } catch {
+        clearTimeout(safetyTimer);
+        fallbackOriginal();
+      }
+    };
+
+    video.onerror = () => {
+      clearTimeout(safetyTimer);
+      fallbackOriginal();
+    };
+  });
+}
+
 function inferMediaKind(bucket: StorageBucket, mimeType: string): 'image' | 'video' | 'audio' {
   const lowerMime = (mimeType || '').toLowerCase();
   if (lowerMime.startsWith('audio/') || bucket === 'match-chat-voices') return 'audio';
-  if (lowerMime.startsWith('video/') || bucket === 'videos' || bucket === 'post-videos') return 'video';
+  if (
+    lowerMime.startsWith('video/') ||
+    bucket === 'videos' ||
+    bucket === 'post-videos' ||
+    bucket === 'futfield-videos'
+  ) {
+    return 'video';
+  }
   return 'image';
 }
 

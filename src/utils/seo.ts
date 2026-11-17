@@ -1,13 +1,14 @@
 import { Match } from '../types/football';
 import { BLOG_ARTICLES } from '../data/blogArticles';
 
-export const CANONICAL_DOMAIN = 'https://futfieldsport.com.ng';
-export const DEFAULT_OG_IMAGE = `${CANONICAL_DOMAIN}/og-image.jpg`;
-export const DEFAULT_SEO_TITLE = 'Futfield - Football Fan App | Live Scores & Match Chat';
+export const PROD_DOMAIN = 'https://futfieldsports.com.ng';
+export const CANONICAL_DOMAIN = PROD_DOMAIN;
+export const DEFAULT_OG_IMAGE = `${PROD_DOMAIN}/futfield-logo.jpg`;
+export const DEFAULT_SEO_TITLE = 'FUTFIELD — Live Football Scores, Match Rooms & Futfield Tube';
 export const DEFAULT_SEO_DESCRIPTION =
-  'Join worldwide football fans on Futfield - share posts, videos, live scores, match chat. Free football community.';
+  'Join worldwide football fans on FUTFIELD! Watch match highlights, join live stadium rooms, and connect with football fans worldwide.';
 export const DEFAULT_SEO_KEYWORDS =
-  'football app, live scores, football social, soccer chat, match highlights';
+  'football app, live scores, football social, soccer chat, match highlights, futfield tube, quick kicks, fanzone';
 
 export interface RouteSeoConfig {
   path: string;
@@ -67,6 +68,9 @@ export function resolvePathFromAppState(params: {
   activeMatchRoom?: Match | null;
   viewingProfileUserId?: string | null;
   activeBlogSlug?: string | null;
+  tubeSubView?: 'feed' | 'watch' | 'kicks' | 'upload' | 'fanzone';
+  tubeWatchVideoId?: string | null;
+  tubeFanZoneHandle?: string | null;
 }): string {
   if (params.activeMatchRoom?.id) {
     return `/match/${encodeURIComponent(params.activeMatchRoom.id)}`;
@@ -89,7 +93,17 @@ export function resolvePathFromAppState(params: {
   }
   if (params.activeTab === 'reviews') return '/reviews';
   if (params.activeTab === 'share') return '/share';
-  if (params.activeTab === 'videos') return '/highlights';
+  if (params.activeTab === 'videos') {
+    if (params.tubeSubView === 'watch' && params.tubeWatchVideoId) {
+      return `/tube/watch/${encodeURIComponent(params.tubeWatchVideoId)}`;
+    }
+    if (params.tubeSubView === 'kicks') return '/tube/kicks';
+    if (params.tubeSubView === 'upload') return '/tube/upload';
+    if (params.tubeSubView === 'fanzone' && params.tubeFanZoneHandle) {
+      return `/fanzone/${encodeURIComponent(params.tubeFanZoneHandle.replace(/^@/, ''))}`;
+    }
+    return '/tube';
+  }
   if (params.activeTab === 'communities') return '/communities';
   return '/';
 }
@@ -100,6 +114,9 @@ export function buildRouteSeoConfig(params: {
   activeMatchRoom?: Match | null;
   viewingProfileUserId?: string | null;
   activeBlogSlug?: string | null;
+  tubeSubView?: 'feed' | 'watch' | 'kicks' | 'upload' | 'fanzone';
+  tubeWatchVideoId?: string | null;
+  tubeFanZoneHandle?: string | null;
 }): RouteSeoConfig {
   const path = resolvePathFromAppState(params);
 
@@ -112,6 +129,32 @@ export function buildRouteSeoConfig(params: {
       description: `Join live soccer chat and follow ${m.homeTeam.name} vs ${m.awayTeam.name} (${m.homeTeam.score}-${m.awayTeam.score}) live scores on Futfield.`,
       keywords: `${m.homeTeam.name}, ${m.awayTeam.name}, ${DEFAULT_SEO_KEYWORDS}`,
       ogType: 'article',
+    };
+  }
+
+  if (params.activeTab === 'videos') {
+    if (params.tubeSubView === 'fanzone' && params.tubeFanZoneHandle) {
+      return {
+        path,
+        title: clampTitle(`${params.tubeFanZoneHandle} FanZone | Futfield Tube`),
+        description: `Connect with ${params.tubeFanZoneHandle} FanZone for football Clips, Quick Kicks & Matchday Packs on Futfield Tube.`,
+        keywords: `Futfield Tube, FanZone, Quick Kicks, ${DEFAULT_SEO_KEYWORDS}`,
+        ogType: 'profile',
+      };
+    }
+    if (params.tubeSubView === 'kicks') {
+      return {
+        path,
+        title: clampTitle('Quick Kicks 🔥 | Futfield Tube'),
+        description: 'Swipe vertical 9:16 Quick Kicks goals, skills, and fan reactions with stadium audio on Futfield Tube.',
+        keywords: `Quick Kicks, Futfield Tube, football clips, ${DEFAULT_SEO_KEYWORDS}`,
+      };
+    }
+    return {
+      path,
+      title: clampTitle('Futfield Tube 🔥 | Football Clips, Quick Kicks & FanZones'),
+      description: 'Watch non-copyright football goals, tactical clips, FanZone battles, and 9:16 Quick Kicks on Futfield Tube.',
+      keywords: `Futfield Tube, Quick Kicks, FanZone, ${DEFAULT_SEO_KEYWORDS}`,
     };
   }
 
@@ -171,9 +214,9 @@ export function buildRouteSeoConfig(params: {
   if (params.activeTab === 'menu' || params.activeTab === 'studio') {
     return {
       path: '/features',
-      title: clampTitle('Futfield Features | Live Chat, PitchReels & Tactical Hub'),
+      title: clampTitle('Futfield Features | Live Chat, Futfield Tube & Tactical Hub'),
       description:
-        'Explore Futfield football app features: 9:16 PitchReels shorts, tactical formation boards, player scout & live match rooms.',
+        'Explore Futfield football app features: Futfield Tube Quick Kicks, tactical formation boards, player scout & live match rooms.',
       keywords: `football tactical studio, player scout, ${DEFAULT_SEO_KEYWORDS}`,
     };
   }
@@ -183,7 +226,7 @@ export function buildRouteSeoConfig(params: {
       path: '/pricing',
       title: clampTitle('Futfield Pro Pricing | Unlimited Football Fan Experience'),
       description:
-        'Compare Futfield free football fan allowances and Pro VIP passes for HD match highlights, priority chat & zero ads.',
+        'Compare Futfield free football fan allowances and Pro VIP passes for 1080p Futfield Tube uploads, priority chat & zero ads.',
       keywords: `Futfield pricing, football app pro, ${DEFAULT_SEO_KEYWORDS}`,
     };
   }
@@ -193,7 +236,7 @@ export function buildRouteSeoConfig(params: {
       return {
         path: '/terms',
         title: clampTitle('Terms of Use | Futfield Football Fan App'),
-        description: 'Read Futfield Terms of Use covering live match rooms, fair highlight sharing, and community conduct.',
+        description: 'Read Futfield Terms of Use covering live match rooms, fair clip sharing, and community conduct.',
         keywords: `Futfield terms, ${DEFAULT_SEO_KEYWORDS}`,
       };
     }
@@ -220,7 +263,7 @@ export function buildRouteSeoConfig(params: {
     return {
       path: `/profile/${encodeURIComponent(cleanHandle)}`,
       title: clampTitle(`${cleanHandle} Profile | Futfield Football Fan App`),
-      description: `Follow ${cleanHandle} on Futfield — view football takes, PitchReels match highlights, and favorite club stats.`,
+      description: `Follow ${cleanHandle} on Futfield — view football takes, Futfield Tube clips, and favorite club stats.`,
       keywords: `${cleanHandle}, football fan profile, ${DEFAULT_SEO_KEYWORDS}`,
       ogType: 'profile',
     };
@@ -283,6 +326,9 @@ export function applyRouteSeoMetadata(params: {
   viewingProfileUserId?: string | null;
   activeBlogSlug?: string | null;
   matches?: Match[];
+  tubeSubView?: 'feed' | 'watch' | 'kicks' | 'upload' | 'fanzone';
+  tubeWatchVideoId?: string | null;
+  tubeFanZoneHandle?: string | null;
 }) {
   if (typeof document === 'undefined') return;
   const config = buildRouteSeoConfig(params);

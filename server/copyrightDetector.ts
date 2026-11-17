@@ -52,9 +52,9 @@ const DRM_ATOMS: Array<{ pattern: RegExp; code: string; label: string }> = [
 ];
 
 const BROADCASTER_SIGNATURES: Array<{ pattern: RegExp; code: string; label: string }> = [
-  { pattern: /\buefa\s*(champions\s*league|europa\s*league|conference\s*league|euro|official)?\b/i, code: 'BC_UEFA', label: 'UEFA Protected Broadcast / Competition Feed' },
-  { pattern: /\bfifa\s*(official|world\s*cup|club\s*world\s*cup|plus)?\b/i, code: 'BC_FIFA', label: 'FIFA Official Rights-Holder Content' },
-  { pattern: /\bpremier\s*league\s*(official|broadcast|productions)?\b/i, code: 'BC_PL_PROD', label: 'Premier League Productions Protected Feed' },
+  { pattern: /\buefa\s+(official|broadcast|feed|productions|rights)\b/i, code: 'BC_UEFA', label: 'UEFA Protected Broadcast / Competition Feed' },
+  { pattern: /\bfifa\s+(official|broadcast|plus|productions)\b/i, code: 'BC_FIFA', label: 'FIFA Official Rights-Holder Content' },
+  { pattern: /\bpremier\s+league\s+(official|broadcast|productions)\b/i, code: 'BC_PL_PROD', label: 'Premier League Productions Protected Feed' },
   { pattern: /\bsky\s*sports\b/i, code: 'BC_SKY_SPORTS', label: 'Sky Sports Broadcast Watermark' },
   { pattern: /\bbein\s*sports?\b/i, code: 'BC_BEIN', label: 'beIN SPORTS Broadcast Feed' },
   { pattern: /\btnt\s*sports?\b/i, code: 'BC_TNT', label: 'TNT Sports Broadcast Feed' },
@@ -63,7 +63,7 @@ const BROADCASTER_SIGNATURES: Array<{ pattern: RegExp; code: string; label: stri
   { pattern: /\bnbc\s*sports?\b/i, code: 'BC_NBC', label: 'NBC Sports Protected Broadcast' },
   { pattern: /\bcbs\s*sports(\s*golazo)?\b/i, code: 'BC_CBS', label: 'CBS Sports Golazo Network Feed' },
   { pattern: /\bespn\s*(\+|plus|fc|deportes)?\b/i, code: 'BC_ESPN', label: 'ESPN+ / ESPN Protected Broadcast' },
-  { pattern: /\blaliga\s*(tv|official)\b/i, code: 'BC_LALIGA_TV', label: 'LaLiga TV Protected Broadcast' },
+  { pattern: /\blaliga\s*(tv|official|broadcast)\b/i, code: 'BC_LALIGA_TV', label: 'LaLiga TV Protected Broadcast' },
   { pattern: /\bsupersport\b/i, code: 'BC_SUPERSPORT', label: 'SuperSport Broadcast Stream' },
   { pattern: /\bcanal\s*\+/i, code: 'BC_CANAL_PLUS', label: 'Canal+ Protected Broadcast' },
   { pattern: /\bsony\s*(ten|liv|sports)\b/i, code: 'BC_SONY_TEN', label: 'Sony Ten / LIV Broadcast Rights' },

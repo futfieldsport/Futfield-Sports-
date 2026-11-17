@@ -1,5 +1,11 @@
 import { CANONICAL_DOMAIN } from './seo';
 
+/**
+ * Production domain constant strictly enforced across all share links, invites,
+ * QR codes, SMS, WhatsApp, and copy buttons to prevent AI Studio dev URLs from leaking.
+ */
+export const PROD_DOMAIN = 'https://futfieldsports.com.ng';
+
 export type ShareContentKind = 'app' | 'profile' | 'video' | 'post' | 'match' | 'blog';
 
 export interface SharePayload {
@@ -9,6 +15,7 @@ export interface SharePayload {
   kind: ShareContentKind;
   targetId?: string;
   previewImage?: string;
+  videoUrl?: string;
   metaLabel?: string;
 }
 
@@ -62,15 +69,70 @@ export function detectDevicePhoneContext(): DevicePhoneContext {
 }
 
 /**
- * Build a phone-openable live URL using the current active origin (so preview links open on phones),
- * falling back to CANONICAL_DOMAIN when unavailable.
+ * Detect environment and return the safe public production origin:
+ * If running on ais-dev, localhost, run.app, aistudio, or webcontainer,
+ * it returns PROD_DOMAIN ("https://futfieldsports.com.ng").
+ */
+export function getShareOrigin(): string {
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    const host = window.location.hostname.toLowerCase();
+    if (
+      host.includes('ais-dev') ||
+      host.includes('localhost') ||
+      host.includes('127.0.0.1') ||
+      host.includes('run.app') ||
+      host.includes('aistudio') ||
+      host.includes('webcontainer')
+    ) {
+      return PROD_DOMAIN;
+    }
+    return window.location.origin;
+  }
+  return PROD_DOMAIN;
+}
+
+/**
+ * Build a production-grade shareable URL using environment detection.
+ * Dev URLs are strictly converted to PROD_DOMAIN.
  */
 export function buildShareUrl(path: string = '/'): string {
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return `${window.location.origin}${cleanPath}`;
+  const origin = getShareOrigin();
+  return `${origin}${cleanPath}`;
+}
+
+/**
+ * Build user invite / referral link:
+ * e.g. https://futfieldsports.com.ng/join/amos or https://futfieldsports.com.ng/join?code=amos
+ */
+export function buildUserInviteUrl(user?: { id?: string; handle?: string; name?: string } | null): string {
+  if (!user) return `${PROD_DOMAIN}/join`;
+  const rawCode = user.handle
+    ? user.handle.replace(/^@/, '')
+    : user.name
+    ? user.name.toLowerCase().replace(/[^a-z0-9]/g, '')
+    : '';
+  if (rawCode) {
+    return `${PROD_DOMAIN}/join?code=${encodeURIComponent(rawCode)}`;
   }
-  return `${CANONICAL_DOMAIN}${cleanPath}`;
+  const ref = user.id ? user.id.slice(0, 6) : 'app';
+  return `${PROD_DOMAIN}/invite?ref=${encodeURIComponent(ref)}`;
+}
+
+/**
+ * Build latest video / reel share URL:
+ * https://futfieldsports.com.ng/videos/${videoId}
+ */
+export function buildVideoShareUrl(videoId: string): string {
+  return `${PROD_DOMAIN}/videos/${encodeURIComponent(videoId)}`;
+}
+
+/**
+ * Build live match share URL:
+ * https://futfieldsports.com.ng/live/${matchId}
+ */
+export function buildMatchShareUrl(matchId: string): string {
+  return `${PROD_DOMAIN}/live/${encodeURIComponent(matchId)}`;
 }
 
 /**
@@ -173,4 +235,63 @@ export async function trackShareEvent(params: {
     }
   } catch {}
   return { success: false };
+}
+
+export async function downloadVideoFile(params: {
+  id?: string;
+  title?: string;
+  videoUrl: string;
+}): Promise<{ success: boolean; filename?: string; sizeBytes?: number; error?: string }> {
+  const safeBase =
+    String(params.title || 'futfield_video')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 64) || 'futfield_video';
+
+  const candidates: string[] = [];
+  if (params.id && !params.videoUrl.startsWith('blob:') && !params.videoUrl.startsWith('data:')) {
+    candidates.push(`/api/db/videos/${encodeURIComponent(params.id)}/download`);
+  }
+  if (params.videoUrl && !params.videoUrl.startsWith('blob:') && !params.videoUrl.startsWith('data:')) {
+    candidates.push(
+      `/api/db/media/download?url=${encodeURIComponent(params.videoUrl)}&title=${encodeURIComponent(safeBase)}`
+    );
+  }
+  if (params.videoUrl) {
+    candidates.push(params.videoUrl);
+  }
+
+  let lastErr = 'Video file could not be downloaded.';
+  for (const endpoint of candidates) {
+    try {
+      const res = await fetch(endpoint);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        if (errJson?.error) lastErr = errJson.error;
+        continue;
+      }
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) {
+        lastErr = 'Downloaded video file is empty.';
+        continue;
+      }
+      const type = blob.type || res.headers.get('content-type') || 'video/mp4';
+      const ext = type.includes('webm') ? '.webm' : type.includes('quicktime') ? '.mov' : '.mp4';
+      const filename = `${safeBase}${ext}`;
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+      return { success: true, filename, sizeBytes: blob.size };
+    } catch (err: any) {
+      lastErr = err?.message || lastErr;
+    }
+  }
+
+  return { success: false, error: lastErr };
 }

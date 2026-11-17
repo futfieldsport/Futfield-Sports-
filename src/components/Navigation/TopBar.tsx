@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 
+import { scrollToTopInstant } from '../../utils/scroll';
+
 interface TopBarProps {
   onOpenCreatePost?: () => void;
 }
@@ -33,6 +35,7 @@ export const TopBar: React.FC<TopBarProps> = ({ onOpenCreatePost }) => {
     }
     if (activeTab !== 'home') {
       setActiveTab('home');
+      scrollToTopInstant();
     }
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent('futfield:focus-composer'));
@@ -40,14 +43,17 @@ export const TopBar: React.FC<TopBarProps> = ({ onOpenCreatePost }) => {
   };
 
   return (
-    <header className="sticky top-0 z-30 w-full bg-white/95 dark:bg-[#090D12]/95 backdrop-blur-md border-b border-slate-200/80 dark:border-white/10 transition-colors">
+    <header className="sticky top-0 z-30 w-full bg-white/95 dark:bg-[#090D12]/95 backdrop-blur-md border-b border-slate-200/80 dark:border-white/10">
       <div className="h-[2px] w-full club-accent-bar opacity-85" />
       <div className="px-3 sm:px-5 h-14 flex items-center justify-between gap-2">
         {/* Left: Back Button (when navigable) + Create Post Button */}
         <div className="flex items-center gap-1.5 shrink-0">
           {canGoBack && (
             <button
-              onClick={goBack}
+              onClick={() => {
+                goBack();
+                scrollToTopInstant();
+              }}
               className="min-h-[44px] px-3 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 flex items-center gap-1 text-slate-900 dark:text-white text-xs font-extrabold transition-all active:scale-95 whitespace-nowrap shrink-0"
               title="Go back to where you last left off"
               aria-label="Go back"
@@ -68,7 +74,10 @@ export const TopBar: React.FC<TopBarProps> = ({ onOpenCreatePost }) => {
 
         {/* Center: FUTFIELD Brand Title */}
         <button
-          onClick={() => setActiveTab('home')}
+          onClick={() => {
+            setActiveTab('home');
+            scrollToTopInstant();
+          }}
           className="min-h-[44px] px-2 cursor-pointer group flex items-center gap-2 select-none whitespace-nowrap shrink-0"
           aria-label="FUTFIELD Home"
         >
