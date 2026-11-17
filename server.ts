@@ -26,8 +26,20 @@ import {
   manageCopyrightRegistry,
 } from './server/copyrightDetector.ts';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Resolve the server directory safely in both ESM (local `tsx server.ts`) and the
+// CommonJS bundle produced for Netlify Functions, where `import.meta.url` is undefined.
+function resolveServerDir(): string {
+  try {
+    const metaUrl = (import.meta as any)?.url;
+    if (typeof metaUrl === 'string' && metaUrl) {
+      return path.dirname(fileURLToPath(metaUrl));
+    }
+  } catch {
+    // fall through to cwd
+  }
+  return process.cwd();
+}
+const __dirname = resolveServerDir();
 
 const IS_SERVERLESS = Boolean(
   process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT
@@ -6705,7 +6717,13 @@ app.post('/api/reviews/:id/upvote', (req, res) => {
 // -------------------------------------------------------------
 // Viral SEO Endpoints: /robots.txt & Dynamic /sitemap.xml (futfieldsport.com.ng)
 // -------------------------------------------------------------
-const SEO_CANONICAL_DOMAIN = 'https://futfieldsport.com.ng';
+// Use the site's live primary URL so sitemap/robots URLs always resolve.
+// APP_URL overrides; Netlify's URL is the primary domain (custom domain once attached).
+const SEO_CANONICAL_DOMAIN = (
+  process.env.APP_URL ||
+  process.env.URL ||
+  'https://futfieldsports.netlify.app'
+).replace(/\/+$/, '');
 
 app.get('/robots.txt', (_req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
