@@ -69,7 +69,9 @@ export const FutfieldStudioTab: React.FC = () => {
     openShareSheet,
     openVideoInReels,
     deleteVideo,
+    setPricingModalOpen,
   } = useFootball();
+  const isProUser = Boolean(user.isPro || user.membershipTier === 'pro' || user.membershipTier === 'vip');
   const [confirmDeleteVideoId, setConfirmDeleteVideoId] = useState<string | null>(null);
 
   // Studio Sub-Navigation Tabs matching Futfield Tube Studio structure
@@ -224,6 +226,16 @@ export const FutfieldStudioTab: React.FC = () => {
   }, [thumbHeadline, thumbClub1, thumbClub2, thumbScore, thumbFormat, thumbTheme, studioSection]);
 
   const handleDownloadThumbnail = () => {
+    if (!isProUser) {
+      haptics.light();
+      addNotification({
+        title: 'Pro Users Only',
+        body: 'Upgrade to Futfield Pro to download HD files to your device.',
+        type: 'system',
+      });
+      setPricingModalOpen(true);
+      return;
+    }
     haptics.success();
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -422,7 +434,7 @@ export const FutfieldStudioTab: React.FC = () => {
           <div className="flex items-center gap-3 min-w-0">
             <div className="relative shrink-0">
               <img
-                src={user.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                src={user.avatar || '/futfield-logo.jpg'}
                 alt={user.name}
                 referrerPolicy="no-referrer"
                 className="w-13 h-13 rounded-2xl object-cover ring-2 ring-[#00E676]/30 shadow-md"
@@ -591,15 +603,15 @@ export const FutfieldStudioTab: React.FC = () => {
                       src={latestVideo.thumbnailUrl}
                       alt={latestVideo.title}
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain bg-black transform-gpu"
                     />
                   ) : latestVideo.videoUrl ? (
                     <video
-                      src={`${latestVideo.videoUrl}#t=0.4`}
+                      src={latestVideo.videoUrl}
                       preload="metadata"
                       muted
                       playsInline
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain bg-black transform-gpu"
                     />
                   ) : null}
                   <span className="absolute bottom-1 right-1 px-1 py-0.5 rounded bg-black/80 text-[9px] font-mono tabular-nums text-white">
@@ -806,15 +818,15 @@ export const FutfieldStudioTab: React.FC = () => {
                           src={vid.thumbnailUrl}
                           alt={vid.title}
                           referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain bg-black transform-gpu"
                         />
                       ) : vid.videoUrl ? (
                         <video
-                          src={`${vid.videoUrl}#t=0.4`}
+                          src={vid.videoUrl}
                           preload="metadata"
                           muted
                           playsInline
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain bg-black transform-gpu"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-slate-900 text-white/40">
@@ -891,36 +903,19 @@ export const FutfieldStudioTab: React.FC = () => {
                       >
                         <Share2 className="w-3.5 h-3.5" />
                       </button>
-                      {confirmDeleteVideoId === vid.id ? (
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              deleteVideo(vid.id);
-                              setConfirmDeleteVideoId(null);
-                            }}
-                            className="px-2 py-1 rounded-lg bg-rose-600 text-white font-bold text-[10px]"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteVideoId(null)}
-                            className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-white/10 text-slate-700 dark:text-white text-[10px]"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteVideoId(vid.id)}
-                          className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400"
-                          title="Delete video"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            sessionStorage.setItem('futfield_settings_section', 'content');
+                          } catch {}
+                          setActiveTab('settings');
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-white/5 hover:bg-[#00E676]/15 text-slate-700 dark:text-white/80 hover:text-[#00E676] text-[10px] font-bold"
+                        title="Manage or delete in Content Settings"
+                      >
+                        Content Settings
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1475,9 +1470,15 @@ export const FutfieldStudioTab: React.FC = () => {
                 <button
                   onClick={handleDownloadThumbnail}
                   className="flex-1 py-2 rounded-2xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 text-slate-800 dark:text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all"
+                  title={isProUser ? 'Download PNG' : 'Pro Users Only'}
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download PNG</span>
+                  {!isProUser && (
+                    <span className="px-1 py-0.2 rounded bg-amber-400 text-black text-[8px] font-black">
+                      PRO
+                    </span>
+                  )}
                 </button>
                 <button
                   onClick={handleApplyToLatestVideo}
@@ -1524,7 +1525,7 @@ export const FutfieldStudioTab: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-2">
                         <img
-                          src={c.author?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                          src={c.author?.avatar || '/futfield-logo.jpg'}
                           alt={c.author?.name || 'Supporter'}
                           referrerPolicy="no-referrer"
                           className="w-7 h-7 rounded-full object-cover"
@@ -1580,7 +1581,7 @@ export const FutfieldStudioTab: React.FC = () => {
       {/* ============================================================= */}
       {studioSection === 'monetization' && (
         <div className="space-y-4">
-          {/* Real Wallet & AI Monetization Engine */}
+          {/* Real Wallet & Creator Revenue Engine */}
           <MonetizationModal embedded isOpen={true} onClose={() => {}} />
 
           {/* Creator Fan Points & Verified Badging Roadmap */}

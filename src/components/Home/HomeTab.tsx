@@ -28,6 +28,7 @@ import {
   TrendingUp,
   Radio,
   Download,
+  Crown,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { Post, PostComment } from '../../types/football';
@@ -88,7 +89,12 @@ export const HomeTab: React.FC = () => {
     openVideoInReels,
     targetPostId,
     setTargetPostId,
+    setPricingModalOpen,
   } = useFootball();
+
+  const isProUser = Boolean(
+    user.isPro || user.membershipTier === 'pro' || user.membershipTier === 'vip'
+  );
 
   const { triggerMessage, triggerSuccess, triggerWarning } = useHaptics();
 
@@ -410,6 +416,16 @@ export const HomeTab: React.FC = () => {
   };
 
   const handleDownloadPostVideo = async (post: Post) => {
+    if (!isProUser) {
+      haptics.light();
+      addNotification({
+        title: 'Pro Users Only',
+        body: 'Upgrade to Futfield Pro to download videos directly to your device.',
+        type: 'system',
+      });
+      setPricingModalOpen(true);
+      return;
+    }
     const src = post.videoUrl || post.mediaUrl;
     if (!src || downloadingPostId === post.id) return;
     haptics.light();
@@ -477,17 +493,23 @@ export const HomeTab: React.FC = () => {
     });
   };
 
-  // Delete Post cleanly without full page reload
-  const handleDeletePost = async (postId: string) => {
-    if (confirm('Are you sure you want to delete this post?')) {
-      await deletePostOnServer(postId);
-      setActiveMenuPostId(null);
-      addNotification({
-        title: 'Post Deleted',
-        body: 'The post was removed from your feed.',
-        type: 'system',
-      });
-    }
+  const [confirmDeletePostId, setConfirmDeletePostId] = useState<string | null>(null);
+
+  // Delete Post cleanly via in-app modal confirmation (zero browser confirm())
+  const handleDeletePost = (postId: string) => {
+    setConfirmDeletePostId(postId);
+    setActiveMenuPostId(null);
+  };
+
+  const executeDeletePost = async () => {
+    if (!confirmDeletePostId) return;
+    await deletePostOnServer(confirmDeletePostId);
+    setConfirmDeletePostId(null);
+    addNotification({
+      title: 'Post Deleted',
+      body: 'The post was removed from your feed.',
+      type: 'system',
+    });
   };
 
   const getPostEngagementScore = (p: Post) => {
@@ -784,9 +806,9 @@ export const HomeTab: React.FC = () => {
                 {uploadStatus === 'uploaded' && mediaUrl && (
                   <div className="relative rounded-xl overflow-hidden border border-[#00E676]/40 bg-black group">
                     {mediaType === 'image' ? (
-                      <img src={mediaUrl} alt="Uploaded post image" className="w-full max-h-52 object-cover" />
+                      <img src={mediaUrl} alt="Uploaded post image" className="w-full max-h-52 object-contain bg-black" />
                     ) : (
-                      <video src={mediaUrl} controls playsInline className="w-full max-h-52" />
+                      <video src={mediaUrl} controls playsInline preload="auto" className="w-full max-h-52 object-contain bg-black transform-gpu" />
                     )}
 
                     <button
@@ -902,36 +924,40 @@ export const HomeTab: React.FC = () => {
         )}
 
         {/* Bottom Toolbar & Post Button */}
-        <div className="pt-2.5 border-t border-slate-100 dark:border-white/8 flex items-center justify-between">
-          <div className="flex items-center gap-1 text-slate-600 dark:text-white/75">
+        <div className="pt-2.5 border-t border-slate-100 dark:border-white/8 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 text-slate-600 dark:text-white/75 flex-wrap">
             <input
               type="file"
               ref={fileInputRef}
               onChange={handleSelectImage}
-              accept="image/*"
+              accept="image/*,.heic,.heif,.webp,.png,.jpg,.jpeg"
               className="hidden"
             />
             <button
+              type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 text-emerald-600 dark:text-emerald-400 transition-colors"
-              title="Add match photo"
+              className="min-h-[44px] px-3 py-1.5 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-extrabold transition-colors"
+              title="Upload Photo"
             >
-              <ImageIcon className="w-4 h-4" />
+              <ImageIcon className="w-4 h-4 shrink-0" />
+              <span>Photo</span>
             </button>
 
             <input
               type="file"
               ref={videoInputRef}
               onChange={handleSelectVideo}
-              accept="video/*"
+              accept="video/*,.mp4,.mov,.m4v,.webm,.3gp"
               className="hidden"
             />
             <button
+              type="button"
               onClick={() => videoInputRef.current?.click()}
-              className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 text-blue-600 dark:text-blue-400 transition-colors"
-              title="Add match video"
+              className="min-h-[44px] px-3 py-1.5 flex items-center justify-center gap-1.5 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 text-xs font-extrabold transition-colors"
+              title="Upload Video"
             >
-              <VideoIcon className="w-4 h-4" />
+              <VideoIcon className="w-4 h-4 shrink-0" />
+              <span>Video</span>
             </button>
 
             <button
@@ -1211,8 +1237,8 @@ export const HomeTab: React.FC = () => {
                           poster={post.thumbnailUrl || undefined}
                           controls
                           playsInline
-                          preload="metadata"
-                          className="w-full h-full object-contain"
+                          preload="auto"
+                          className="w-full h-full object-contain bg-black transform-gpu"
                         />
                       </div>
                       <div className="px-3 py-2 bg-slate-900/95 text-white flex items-center justify-between gap-2 text-[11px]">
@@ -1227,9 +1253,16 @@ export const HomeTab: React.FC = () => {
                             disabled={downloadingPostId === post.id}
                             onClick={() => handleDownloadPostVideo(post)}
                             className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold flex items-center gap-1 disabled:opacity-50"
+                            title={isProUser ? 'Download Video' : 'Pro Users Only'}
                           >
                             <Download className="w-3 h-3" />
                             <span>{downloadingPostId === post.id ? 'Saving...' : 'Download'}</span>
+                            {!isProUser && (
+                              <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-amber-400 text-black text-[8px] font-black">
+                                <Crown className="w-2.5 h-2.5" />
+                                PRO
+                              </span>
+                            )}
                           </button>
                           <button
                             type="button"
@@ -1294,7 +1327,7 @@ export const HomeTab: React.FC = () => {
                     {shareFeedbackId === post.id ? (
                       <>
                         <Check className="w-4 h-4 text-emerald-600 dark:text-[#00E676]" />
-                        <span>Copied</span>
+                        <span>Shared</span>
                       </>
                     ) : (
                       <>
@@ -1542,6 +1575,34 @@ export const HomeTab: React.FC = () => {
             >
               <X className="w-4 h-4" />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Delete Post Confirmation Modal */}
+      {confirmDeletePostId && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-xs rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-white/10 p-5 shadow-2xl space-y-4">
+            <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Delete Football Post?</h3>
+            <p className="text-xs text-slate-600 dark:text-white/70 leading-relaxed">
+              This will permanently remove this post from your feed.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeletePostId(null)}
+                className="flex-1 min-h-[44px] py-2 rounded-xl bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-white text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeDeletePost}
+                className="flex-1 min-h-[44px] py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black"
+              >
+                Delete
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Flame,
   Shield,
-  Layers,
+  Target,
+  Brain,
   Award,
-  Search,
   Users,
   Settings,
   ChevronRight,
@@ -26,8 +26,10 @@ import {
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { haptics } from '../../utils/haptics';
-import { TOP_10_LEAGUES, TOP_10_LEAGUE_PLAYERS, FootballPlayer, LeagueInfo } from '../../data/top10LeaguesPlayers';
+import { TOP_10_LEAGUES, LeagueInfo } from '../../data/top10LeaguesPlayers';
 import { formatTodayFull, formatTodayShort } from '../../utils/dateFormat';
+import { MatchdayPredictorView } from '../Hub/MatchdayPredictorView';
+import { FootballIqArenaView } from '../Hub/FootballIqArenaView';
 
 interface LiveLeagueItem extends LeagueInfo {
   fotmobId?: number;
@@ -35,43 +37,26 @@ interface LiveLeagueItem extends LeagueInfo {
   todayCount?: number;
 }
 
-function buildDefaultSquadSlots(pool: FootballPlayer[]): Array<FootballPlayer | null> {
-  const source = pool.length > 0 ? pool : TOP_10_LEAGUE_PLAYERS;
-  const used = new Set<string>();
-  const pick = (pos: 'GK' | 'DF' | 'MF' | 'FW'): FootballPlayer | null => {
-    const match = source.find(p => p.position === pos && !used.has(p.id))
-      || TOP_10_LEAGUE_PLAYERS.find(p => p.position === pos && !used.has(p.id))
-      || source.find(p => !used.has(p.id))
-      || null;
-    if (match) used.add(match.id);
-    return match;
-  };
-  return [
-    pick('GK'),
-    pick('DF'), pick('DF'), pick('DF'), pick('DF'),
-    pick('MF'), pick('MF'), pick('MF'),
-    pick('FW'), pick('FW'), pick('FW'),
-  ];
-}
-
 export const MenuTab: React.FC = () => {
   const {
     user,
     addFanPoints,
     addNotification,
-    setPlayerScoutModalOpen,
     setActiveTab,
     openSupportLegalPage,
     setPricingModalOpen,
     matches,
     communities,
+    menuDedicatedPage,
+    setMenuDedicatedPage,
   } = useFootball();
 
   const todayFull = formatTodayFull();
   const todayShort = formatTodayShort();
 
-  // Active Dedicated View: null = Menu Hub, or string = full sub-page
-  const [dedicatedPage, setDedicatedPage] = useState<'tactics' | 'leagues' | 'scout' | 'vault' | null>(null);
+  // Active Dedicated View synced with Context: null = Menu Hub, or string = full sub-page
+  const dedicatedPage = menuDedicatedPage;
+  const setDedicatedPage = setMenuDedicatedPage;
 
   // Live Top 10 Leagues + Standings state
   const [liveLeagues, setLiveLeagues] = useState<LiveLeagueItem[]>(
@@ -137,41 +122,8 @@ export const MenuTab: React.FC = () => {
     setLoadingTable(false);
   };
 
-  // -------------------------------------------------------------
-  // FEATURE 1: TACTICAL PITCH ARCHITECT (Real-Time Players & Board)
-  // -------------------------------------------------------------
-  const [formation, setFormation] = useState<'4-3-3' | '4-2-3-1' | '3-5-2' | '4-4-2' | '5-3-2'>('4-3-3');
-  const [mentality, setMentality] = useState<'press' | 'possession' | 'counter' | 'balanced'>('press');
-  const [selectedSlotIndex, setSelectedSlotIndex] = useState<number | null>(null);
-  const [tacticalSearch, setTacticalSearch] = useState('');
-  const [apiPlayers, setApiPlayers] = useState<FootballPlayer[]>(TOP_10_LEAGUE_PLAYERS);
-  const [tacticalDrawerPlayers, setTacticalDrawerPlayers] = useState<FootballPlayer[]>(TOP_10_LEAGUE_PLAYERS);
-  const [tacticalDrawerLoading, setTacticalDrawerLoading] = useState(false);
-
-  const formationPositions: Record<string, string[]> = {
-    '4-3-3': ['GK', 'LB', 'CB', 'CB', 'RB', 'CM', 'CDM', 'CM', 'LW', 'ST', 'RW'],
-    '4-2-3-1': ['GK', 'LB', 'CB', 'CB', 'RB', 'CDM', 'CDM', 'CAM', 'LM', 'ST', 'RM'],
-    '3-5-2': ['GK', 'CB', 'CB', 'CB', 'LWB', 'CM', 'CDM', 'CM', 'RWB', 'ST', 'ST'],
-    '4-4-2': ['GK', 'LB', 'CB', 'CB', 'RB', 'LM', 'CM', 'CM', 'RM', 'ST', 'ST'],
-    '5-3-2': ['GK', 'LWB', 'CB', 'CB', 'CB', 'RWB', 'CM', 'CM', 'CM', 'ST', 'ST'],
-  };
-
-  const [squadSlots, setSquadSlots] = useState<Array<FootballPlayer | null>>(() =>
-    buildDefaultSquadSlots(TOP_10_LEAGUE_PLAYERS)
-  );
-
-  // Hydrate leagues & live player pool from backend APIs
   useEffect(() => {
     fetchLiveLeagues();
-    fetch('/api/football/players?sort=rating')
-      .then(res => (res.ok ? res.json() : null))
-      .then(data => {
-        if (Array.isArray(data?.players) && data.players.length > 0) {
-          setApiPlayers(data.players);
-          setTacticalDrawerPlayers(data.players);
-        }
-      })
-      .catch(() => {});
   }, [fetchLiveLeagues]);
 
   useEffect(() => {
@@ -179,102 +131,6 @@ export const MenuTab: React.FC = () => {
       fetchLiveLeagues();
     }
   }, [dedicatedPage, fetchLiveLeagues]);
-
-  // Debounced live search in Tactical Board slot assignment drawer
-  useEffect(() => {
-    if (selectedSlotIndex === null) return;
-    const trimmed = tacticalSearch.trim();
-    if (!trimmed) {
-      setTacticalDrawerPlayers(apiPlayers);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      setTacticalDrawerLoading(true);
-      try {
-        const res = await fetch(`/api/football/players?query=${encodeURIComponent(trimmed)}&sort=rating`);
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data?.players)) {
-            setTacticalDrawerPlayers(data.players);
-          }
-        }
-      } catch {}
-      setTacticalDrawerLoading(false);
-    }, 280);
-    return () => clearTimeout(timer);
-  }, [tacticalSearch, selectedSlotIndex, apiPlayers]);
-
-  const handleAssignPlayer = (player: FootballPlayer) => {
-    if (selectedSlotIndex === null) return;
-    haptics.like();
-    const newSlots = [...squadSlots];
-    newSlots[selectedSlotIndex] = player;
-    setSquadSlots(newSlots);
-    setSelectedSlotIndex(null);
-    setTacticalSearch('');
-  };
-
-  const handleSaveLineup = () => {
-    haptics.success();
-    addFanPoints(20, 'Built Custom Tactical Lineup');
-    addNotification({
-      title: 'Tactical Squad Saved! (+20 Fan Points)',
-      body: `${formation} formation with ${mentality} mentality saved to your tactics profile.`,
-      type: 'system',
-    });
-  };
-
-  // -------------------------------------------------------------
-  // FEATURE 2: REAL-TIME SCOUT CATALOG SEARCH & LIVE HYDRATION
-  // -------------------------------------------------------------
-  const [scoutSearch, setScoutSearch] = useState('');
-  const [scoutPositionFilter, setScoutPositionFilter] = useState<'ALL' | 'FW' | 'MF' | 'DF' | 'GK'>('ALL');
-  const [scoutResults, setScoutResults] = useState<FootballPlayer[]>(TOP_10_LEAGUE_PLAYERS);
-  const [scoutLoading, setScoutLoading] = useState(false);
-  const [selectedScoutPlayer, setSelectedScoutPlayer] = useState<FootballPlayer | null>(null);
-  const [loadingPlayerDetail, setLoadingPlayerDetail] = useState(false);
-
-  const fetchScoutPlayers = useCallback(async (q: string, pos: 'ALL' | 'FW' | 'MF' | 'DF' | 'GK') => {
-    setScoutLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (q.trim()) params.set('query', q.trim());
-      if (pos !== 'ALL') params.set('position', pos);
-      params.set('sort', 'rating');
-      const res = await fetch(`/api/football/players?${params.toString()}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.players)) {
-          setScoutResults(data.players);
-        }
-      }
-    } catch {}
-    setScoutLoading(false);
-  }, []);
-
-  useEffect(() => {
-    if (dedicatedPage !== 'scout') return;
-    const timer = setTimeout(() => {
-      fetchScoutPlayers(scoutSearch, scoutPositionFilter);
-    }, 260);
-    return () => clearTimeout(timer);
-  }, [dedicatedPage, scoutSearch, scoutPositionFilter, fetchScoutPlayers]);
-
-  const handleSelectScoutPlayer = async (player: FootballPlayer) => {
-    haptics.light();
-    setSelectedScoutPlayer(player);
-    setLoadingPlayerDetail(true);
-    try {
-      const res = await fetch(`/api/football/player/${encodeURIComponent(player.id)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.player) {
-          setSelectedScoutPlayer(data.player);
-        }
-      }
-    } catch {}
-    setLoadingPlayerDetail(false);
-  };
 
   return (
     <div className="pb-24 max-w-2xl mx-auto px-3 sm:px-4 pt-3 space-y-4">
@@ -294,12 +150,12 @@ export const MenuTab: React.FC = () => {
             <span>Back to Menu Hub</span>
           </button>
           <span className="text-[11px] font-mono font-bold text-emerald-700 dark:text-[#00E676] uppercase">
-            {dedicatedPage === 'tactics'
-              ? 'Tactical Board'
+            {dedicatedPage === 'predictor'
+              ? 'Matchday Predictor'
               : dedicatedPage === 'leagues'
               ? 'Leagues Radar'
-              : dedicatedPage === 'scout'
-              ? 'Player Scout'
+              : dedicatedPage === 'arena'
+              ? 'Football IQ Arena'
               : 'Points Vault'}
           </span>
         </div>
@@ -319,7 +175,7 @@ export const MenuTab: React.FC = () => {
                   <span>FUTFIELD Hub</span>
                 </h1>
                 <p className="text-xs text-slate-500 dark:text-white/55 truncate">
-                  Tactical boards, verified player database, and live match tools · {todayFull}
+                  Matchday Predictor, Football IQ Arena, live leagues &amp; creator tools · {todayFull}
                 </p>
               </div>
               <button
@@ -337,23 +193,23 @@ export const MenuTab: React.FC = () => {
 
           {/* Quick Hub Grid */}
           <div className="grid grid-cols-2 gap-2.5">
-            {/* Tactical Architect */}
+            {/* Matchday Predictor League */}
             <button
               onClick={() => {
                 haptics.light();
-                setDedicatedPage('tactics');
+                setDedicatedPage('predictor');
               }}
               className="p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm hover:border-[#00E676]/50 transition-all text-left space-y-2"
             >
               <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-[#00E676] flex items-center justify-center">
-                <Layers className="w-5 h-5" />
+                <Target className="w-5 h-5" />
               </div>
               <div>
                 <h3 className="font-display font-extrabold text-xs text-slate-900 dark:text-white">
-                  Tactical Board
+                  Matchday Predictor
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-white/55">
-                  Build 4-3-3 &amp; 4-2-3-1 squad formations
+                  Call match scores &amp; climb the leaderboard
                 </p>
               </div>
             </button>
@@ -379,23 +235,23 @@ export const MenuTab: React.FC = () => {
               </div>
             </button>
 
-            {/* Official Player Scout */}
+            {/* Football IQ Arena */}
             <button
               onClick={() => {
                 haptics.light();
-                setDedicatedPage('scout');
+                setDedicatedPage('arena');
               }}
               className="p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm hover:border-[#00E676]/50 transition-all text-left space-y-2"
             >
               <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
-                <Search className="w-5 h-5" />
+                <Brain className="w-5 h-5" />
               </div>
               <div>
                 <h3 className="font-display font-extrabold text-xs text-slate-900 dark:text-white">
-                  Player Scout
+                  Football IQ Arena
                 </h3>
                 <p className="text-[11px] text-slate-500 dark:text-white/55">
-                  Real-time global &amp; Top 10 league players
+                  Timed trivia &amp; live football fan polls
                 </p>
               </div>
             </button>
@@ -666,273 +522,9 @@ export const MenuTab: React.FC = () => {
       )}
 
       {/* ============================================================= */}
-      {/* SUB-PAGE 1: TACTICAL PITCH ARCHITECT */}
+      {/* SUB-PAGE 1: MATCHDAY PREDICTOR LEAGUE */}
       {/* ============================================================= */}
-      {dedicatedPage === 'tactics' && (
-        <div className="space-y-4">
-          <div className="p-4 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <Layers className="w-4 h-4 text-[#00E676]" />
-                  Tactical Pitch Board
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-white/50">
-                  Select formation, assign verified players, and set tactical style
-                </p>
-              </div>
-
-              <button
-                onClick={handleSaveLineup}
-                className="px-3.5 py-1.5 rounded-xl bg-[#00E676] hover:bg-[#00C853] text-black font-extrabold text-xs shadow-md shadow-[#00E676]/20"
-              >
-                Save Lineup (+20 FP)
-              </button>
-            </div>
-
-            {/* Formation Selector Pills */}
-            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-1">
-              {(['4-3-3', '4-2-3-1', '3-5-2', '4-4-2', '5-3-2'] as const).map(fmt => (
-                <button
-                  key={fmt}
-                  onClick={() => {
-                    haptics.light();
-                    setFormation(fmt);
-                  }}
-                  className={`px-3 py-1 rounded-full text-xs font-extrabold whitespace-nowrap transition-all ${
-                    formation === fmt
-                      ? 'bg-[#00E676] text-black font-extrabold shadow-sm'
-                      : 'bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-white/70'
-                  }`}
-                >
-                  {fmt}
-                </button>
-              ))}
-            </div>
-
-            {/* Team Mentality Selector */}
-            <div className="grid grid-cols-4 gap-1 pt-1">
-              {[
-                { id: 'press', label: 'High Press' },
-                { id: 'possession', label: 'Tiki-Taka' },
-                { id: 'counter', label: 'Counter' },
-                { id: 'balanced', label: 'Balanced' },
-              ].map(m => (
-                <button
-                  key={m.id}
-                  onClick={() => {
-                    haptics.light();
-                    setMentality(m.id as any);
-                  }}
-                  className={`py-1 rounded-xl text-[10px] font-bold capitalize transition-all border ${
-                    mentality === m.id
-                      ? 'bg-[#00E676]/10 text-[#00E676] border-[#00E676]'
-                      : 'border-slate-200 dark:border-white/10 text-slate-500'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Interactive Football Pitch Graphic */}
-            <div className="relative rounded-2xl bg-gradient-to-b from-[#06331a] via-[#084222] to-[#042412] p-4 border border-[#00E676]/30 shadow-inner overflow-hidden min-h-[380px] flex flex-col justify-between">
-              {/* Pitch Markings */}
-              <div className="absolute inset-2 border border-[#00E676]/20 rounded-xl pointer-events-none" />
-              <div className="absolute left-2 right-2 top-1/2 -translate-y-1/2 border-b border-[#00E676]/20 pointer-events-none" />
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 border border-[#00E676]/20 rounded-full pointer-events-none" />
-
-              {/* Pitch Player Nodes in Tactical Rows */}
-              <div className="relative z-10 space-y-4 py-2">
-                {/* Forwards Row */}
-                <div className="flex items-center justify-around">
-                  {[8, 9, 10].map(idx => {
-                    const p = squadSlots[idx];
-                    const posLabel = formationPositions[formation]?.[idx] || 'FW';
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          haptics.light();
-                          setSelectedSlotIndex(idx);
-                        }}
-                        className={`flex flex-col items-center transition-all ${
-                          selectedSlotIndex === idx ? 'scale-110 ring-2 ring-[#00E676] rounded-xl p-1' : ''
-                        }`}
-                      >
-                        <div className="w-10 h-10 rounded-full bg-black/70 border-2 border-[#00E676] overflow-hidden flex items-center justify-center shadow-lg">
-                          {p?.photoUrl ? (
-                            <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] font-black text-white">{posLabel}</span>
-                          )}
-                        </div>
-                        <span className="text-[10px] font-black text-white bg-black/60 px-1.5 py-0.2 rounded mt-1 truncate max-w-[65px]">
-                          {p?.shortName || posLabel}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Midfield Row */}
-                <div className="flex items-center justify-around">
-                  {[5, 6, 7].map(idx => {
-                    const p = squadSlots[idx];
-                    const posLabel = formationPositions[formation]?.[idx] || 'MF';
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          haptics.light();
-                          setSelectedSlotIndex(idx);
-                        }}
-                        className={`flex flex-col items-center transition-all ${
-                          selectedSlotIndex === idx ? 'scale-110 ring-2 ring-[#00E676] rounded-xl p-1' : ''
-                        }`}
-                      >
-                        <div className="w-10 h-10 rounded-full bg-black/70 border-2 border-emerald-400 overflow-hidden flex items-center justify-center shadow-lg">
-                          {p?.photoUrl ? (
-                            <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] font-black text-white">{posLabel}</span>
-                          )}
-                        </div>
-                        <span className="text-[10px] font-black text-white bg-black/60 px-1.5 py-0.2 rounded mt-1 truncate max-w-[65px]">
-                          {p?.shortName || posLabel}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Defenders Row */}
-                <div className="flex items-center justify-around">
-                  {[1, 2, 3, 4].map(idx => {
-                    const p = squadSlots[idx];
-                    const posLabel = formationPositions[formation]?.[idx] || 'DF';
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          haptics.light();
-                          setSelectedSlotIndex(idx);
-                        }}
-                        className={`flex flex-col items-center transition-all ${
-                          selectedSlotIndex === idx ? 'scale-110 ring-2 ring-[#00E676] rounded-xl p-1' : ''
-                        }`}
-                      >
-                        <div className="w-10 h-10 rounded-full bg-black/70 border-2 border-blue-400 overflow-hidden flex items-center justify-center shadow-lg">
-                          {p?.photoUrl ? (
-                            <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] font-black text-white">{posLabel}</span>
-                          )}
-                        </div>
-                        <span className="text-[10px] font-black text-white bg-black/60 px-1.5 py-0.2 rounded mt-1 truncate max-w-[65px]">
-                          {p?.shortName || posLabel}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Goalkeeper */}
-                <div className="flex items-center justify-center pt-1">
-                  {(() => {
-                    const p = squadSlots[0];
-                    return (
-                      <button
-                        onClick={() => {
-                          haptics.light();
-                          setSelectedSlotIndex(0);
-                        }}
-                        className={`flex flex-col items-center transition-all ${
-                          selectedSlotIndex === 0 ? 'scale-110 ring-2 ring-[#00E676] rounded-xl p-1' : ''
-                        }`}
-                      >
-                        <div className="w-10 h-10 rounded-full bg-black/70 border-2 border-amber-400 overflow-hidden flex items-center justify-center shadow-lg">
-                          {p?.photoUrl ? (
-                            <img src={p.photoUrl} alt={p.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] font-black text-white">GK</span>
-                          )}
-                        </div>
-                        <span className="text-[10px] font-black text-white bg-black/60 px-1.5 py-0.2 rounded mt-1 truncate max-w-[65px]">
-                          {p?.shortName || 'GK'}
-                        </span>
-                      </button>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
-
-            {/* Slot assignment drawer */}
-            {selectedSlotIndex !== null && (
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-black/50 border border-[#00E676]/40 space-y-2 animate-in fade-in">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-extrabold text-slate-900 dark:text-white">
-                    Assign {formationPositions[formation]?.[selectedSlotIndex] || 'Player'} (Slot #{selectedSlotIndex + 1})
-                  </span>
-                  <button
-                    onClick={() => {
-                      setSelectedSlotIndex(null);
-                      setTacticalSearch('');
-                    }}
-                    className="min-h-[36px] min-w-[36px] flex items-center justify-center text-slate-400 hover:text-black dark:hover:text-white font-bold"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <input
-                  type="text"
-                  value={tacticalSearch}
-                  onChange={e => setTacticalSearch(e.target.value)}
-                  placeholder="Search live players or club..."
-                  className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-white dark:bg-black/60 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-[#00E676]"
-                />
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-48 overflow-y-auto no-scrollbar pt-1">
-                  {tacticalDrawerLoading ? (
-                    <div className="col-span-full py-4 text-center text-[11px] text-slate-400">
-                      Searching live FotMob player pool...
-                    </div>
-                  ) : tacticalDrawerPlayers.length === 0 ? (
-                    <div className="col-span-full py-4 text-center text-[11px] text-slate-400">
-                      No matching players found.
-                    </div>
-                  ) : (
-                    tacticalDrawerPlayers.slice(0, 30).map(player => (
-                      <button
-                        key={player.id}
-                        onClick={() => handleAssignPlayer(player)}
-                        className="flex items-center gap-2 p-1.5 rounded-xl bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 hover:border-[#00E676] text-left transition-all"
-                      >
-                        <img
-                          src={player.photoUrl}
-                          alt={player.name}
-                          onError={e => {
-                            (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/IMG-20261101-WA4554_bacdb901.jpg';
-                          }}
-                          className="w-7 h-7 rounded-full object-cover shrink-0"
-                        />
-                        <div className="truncate min-w-0">
-                          <span className="font-bold text-[11px] text-slate-800 dark:text-white truncate block">
-                            {player.shortName}
-                          </span>
-                          <span className="text-[9px] text-slate-400 block truncate">
-                            {player.position} · {player.club}
-                          </span>
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {dedicatedPage === 'predictor' && <MatchdayPredictorView />}
 
       {/* ============================================================= */}
       {/* SUB-PAGE 2: TOP 10 LEAGUES RADAR (LIVE API SYNC) */}
@@ -1114,177 +706,9 @@ export const MenuTab: React.FC = () => {
       )}
 
       {/* ============================================================= */}
-      {/* SUB-PAGE 3: REAL-TIME PLAYER SCOUT */}
+      {/* SUB-PAGE 3: FOOTBALL IQ ARENA */}
       {/* ============================================================= */}
-      {dedicatedPage === 'scout' && (
-        <div className="p-4 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
-                <Search className="w-4 h-4 text-[#00E676]" />
-                Real-Time Global Player Scout
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-white/50">
-                Search live FotMob players, active matchday scorers &amp; Top 10 league stars
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                haptics.light();
-                setPlayerScoutModalOpen(true);
-              }}
-              className="min-h-[36px] px-2.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-[#00E676] text-[11px] font-extrabold whitespace-nowrap"
-            >
-              Compare Tool
-            </button>
-          </div>
-
-          {/* Search & Position Pills */}
-          <div className="space-y-2">
-            <input
-              type="text"
-              placeholder="Search any footballer worldwide (e.g. Saka, Yamal, Osimhen, Palmer)..."
-              value={scoutSearch}
-              onChange={e => setScoutSearch(e.target.value)}
-              className="w-full min-h-[42px] px-3 py-2 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-[#00E676]"
-            />
-            <div className="flex items-center gap-1">
-              {(['ALL', 'FW', 'MF', 'DF', 'GK'] as const).map(pos => (
-                <button
-                  key={pos}
-                  onClick={() => {
-                    haptics.light();
-                    setScoutPositionFilter(pos);
-                  }}
-                  className={`flex-1 min-h-[36px] py-1 rounded-xl text-xs font-bold transition-all ${
-                    scoutPositionFilter === pos
-                      ? 'bg-[#00E676] text-black font-extrabold'
-                      : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-white/60'
-                  }`}
-                >
-                  {pos}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Player Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 max-h-[500px] overflow-y-auto no-scrollbar">
-            {scoutLoading ? (
-              <div className="col-span-full py-10 text-center text-xs text-slate-400 animate-pulse">
-                Fetching real-time players from backend scout API...
-              </div>
-            ) : scoutResults.length === 0 ? (
-              <div className="col-span-full py-10 text-center text-xs text-slate-400">
-                No matching players found. Try another surname or club!
-              </div>
-            ) : (
-              scoutResults.map(player => (
-                <div
-                  key={player.id}
-                  onClick={() => handleSelectScoutPlayer(player)}
-                  className="p-3 rounded-2xl bg-slate-50 dark:bg-white/[0.02] border border-slate-100 dark:border-white/5 flex items-center gap-3 cursor-pointer hover:border-[#00E676]/40 transition-all"
-                >
-                  <img
-                    src={player.photoUrl}
-                    alt={player.name}
-                    onError={e => {
-                      (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/IMG-20261101-WA4554_bacdb901.jpg';
-                    }}
-                    className="w-11 h-11 rounded-2xl object-cover shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-1">
-                      <h5 className="font-display font-extrabold text-xs text-slate-900 dark:text-white truncate">
-                        {player.name}
-                      </h5>
-                      <span className="text-xs font-black text-emerald-700 dark:text-[#00E676] font-mono tabular-nums shrink-0">
-                        {player.rating}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-white/55 mt-0.5 tabular-nums truncate">
-                      <span>{player.position}</span>
-                      <span>·</span>
-                      <span className="truncate">{player.club}</span>
-                      <span>·</span>
-                      <span className="shrink-0">{player.stats?.goals ?? 0}G {player.stats?.assists ?? 0}A</span>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {/* Live Player Detail Card */}
-          {selectedScoutPlayer && (
-            <div className="p-4 rounded-3xl bg-slate-50 dark:bg-black/80 border border-emerald-500/40 dark:border-[#00E676]/40 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <img
-                    src={selectedScoutPlayer.photoUrl}
-                    alt={selectedScoutPlayer.name}
-                    onError={e => {
-                      (e.currentTarget as HTMLImageElement).src = '/assets/aistudio/IMG-20261101-WA4554_bacdb901.jpg';
-                    }}
-                    className="w-12 h-12 rounded-2xl object-cover shrink-0"
-                  />
-                  <div className="min-w-0">
-                    <h4 className="font-display font-extrabold text-sm text-slate-900 dark:text-white truncate">
-                      {selectedScoutPlayer.name}
-                    </h4>
-                    <span className="text-xs text-emerald-700 dark:text-[#00E676] font-bold block truncate">
-                      {selectedScoutPlayer.club} · {selectedScoutPlayer.league}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setSelectedScoutPlayer(null)}
-                  className="min-h-[36px] min-w-[36px] rounded-full flex items-center justify-center text-xs font-bold text-slate-400 hover:text-slate-900 dark:hover:text-white shrink-0"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {loadingPlayerDetail && (
-                <div className="text-[11px] text-emerald-700 dark:text-[#00E676] font-semibold animate-pulse">
-                  Syncing live season stats from FotMob...
-                </div>
-              )}
-
-              <div className="grid grid-cols-4 gap-2 text-center text-xs tabular-nums">
-                <div className="p-2 rounded-xl bg-white dark:bg-white/5">
-                  <span className="text-[10px] text-slate-400 block">Rating</span>
-                  <span className="font-black text-slate-900 dark:text-white font-mono text-sm">
-                    {selectedScoutPlayer.rating}
-                  </span>
-                </div>
-                <div className="p-2 rounded-xl bg-white dark:bg-white/5">
-                  <span className="text-[10px] text-slate-400 block">Apps</span>
-                  <span className="font-black text-emerald-600 dark:text-[#00E676] font-mono text-sm">
-                    {selectedScoutPlayer.stats?.appearances ?? 0}
-                  </span>
-                </div>
-                <div className="p-2 rounded-xl bg-white dark:bg-white/5">
-                  <span className="text-[10px] text-slate-400 block">Goals</span>
-                  <span className="font-black text-rose-500 font-mono text-sm">
-                    {selectedScoutPlayer.stats?.goals ?? 0}
-                  </span>
-                </div>
-                <div className="p-2 rounded-xl bg-white dark:bg-white/5">
-                  <span className="text-[10px] text-slate-400 block">Assists</span>
-                  <span className="font-black text-blue-500 font-mono text-sm">
-                    {selectedScoutPlayer.stats?.assists ?? 0}
-                  </span>
-                </div>
-              </div>
-
-              <p className="text-[11px] text-slate-600 dark:text-white/70 leading-relaxed">
-                {selectedScoutPlayer.playingStyle} · Foot: {selectedScoutPlayer.preferredFoot} · {selectedScoutPlayer.bio}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
+      {dedicatedPage === 'arena' && <FootballIqArenaView />}
 
       {/* ============================================================= */}
       {/* SUB-PAGE 4: FAN POINTS & REWARDS VAULT */}

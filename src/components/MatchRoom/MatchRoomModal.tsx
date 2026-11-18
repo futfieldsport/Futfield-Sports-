@@ -39,6 +39,7 @@ import confetti from 'canvas-confetti';
 import { useFootball } from '../../context/FootballContext';
 import { Match, MatchChatMessage, MatchMediaType, MatchMessageType } from '../../types/football';
 import { ClubLogo } from '../Common/ClubLogo';
+import { buildMatchShareUrl } from '../../utils/share';
 import {
   fetchServerMatchMessages,
   sendServerMatchMessage,
@@ -1056,17 +1057,12 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
             {/* Share Live Match Room to Phone */}
             <button
               onClick={() => {
-                const path = `/match/${encodeURIComponent(match.id)}`;
-                const url =
-                  typeof window !== 'undefined' && window.location?.origin
-                    ? `${window.location.origin}${path}`
-                    : `https://futfieldsport.com.ng${path}`;
                 openShareSheet({
                   kind: 'match',
                   targetId: match.id,
                   title: `Live Match Room: ${match.homeTeam.name} vs ${match.awayTeam.name}`,
                   text: `Join live fan chat (${match.homeTeam.score}-${match.awayTeam.score}) on FUTFIELD!`,
-                  url,
+                  url: buildMatchShareUrl(match.id),
                 });
               }}
               className="p-1.5 rounded-full text-slate-600 dark:text-white/80 hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
@@ -1399,7 +1395,7 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
                 {!isMe && (
                   <img
                     onClick={() => navigateToProfile(msg.user?.handle || msg.user?.id)}
-                    src={msg.user?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                    src={msg.user?.avatar || '/futfield-logo.jpg'}
                     alt={`${msg.user?.name || 'Supporter'} football fan avatar`}
                     loading="lazy"
                     decoding="async"
@@ -1880,12 +1876,24 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
             </button>
             <button
               onClick={() => {
+                const isPro = Boolean(user.isPro || user.membershipTier === 'pro' || user.membershipTier === 'vip');
+                if (!isPro) {
+                  addNotification({
+                    title: 'Pro Users Only',
+                    body: 'Upgrade to Futfield Pro to download media files directly to your device.',
+                    type: 'system',
+                  });
+                  setActiveViewerImage(null);
+                  setPricingModalOpen(true);
+                  return;
+                }
                 const a = document.createElement('a');
                 a.href = activeViewerImage.url;
                 a.download = 'futfield_match_photo.jpg';
                 a.click();
               }}
               className="p-2 hover:bg-white/10 rounded-full text-white/80 hover:text-white"
+              title="Download Media (Pro Only)"
             >
               <Download className="w-5 h-5" />
             </button>

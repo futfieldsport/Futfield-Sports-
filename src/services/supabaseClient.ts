@@ -111,6 +111,61 @@ export async function logoutUser(): Promise<void> {
   } catch {}
 }
 
+export async function requestPasswordReset(email: string): Promise<{
+  success: boolean;
+  message?: string;
+  verificationCode?: string;
+  supabaseEmailSent?: boolean;
+  expiresInMinutes?: number;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      return { success: false, error: data.error || 'Unable to send password reset code.' };
+    }
+    return {
+      success: true,
+      message: data.message,
+      verificationCode: data.verificationCode,
+      supabaseEmailSent: Boolean(data.supabaseEmailSent),
+      expiresInMinutes: Number(data.expiresInMinutes || 15),
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error requesting password reset.' };
+  }
+}
+
+export async function confirmPasswordReset(
+  email: string,
+  code: string,
+  newPassword: string
+): Promise<{
+  success: boolean;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code, newPassword }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      return { success: false, error: data.error || 'Unable to reset password.' };
+    }
+    return { success: true, message: data.message || 'Password updated successfully.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error resetting password.' };
+  }
+}
+
 export async function fetchServerPosts(): Promise<Post[]> {
   try {
     const res = await fetch('/api/db/posts');
@@ -542,7 +597,7 @@ export async function fetchUserFollowDetails(userId: string): Promise<{
   }
 }
 
-export async function toggleFollowUserOnServer(followerId: string, followingId: string): Promise<{ success: boolean; following: boolean; followersCount: number }> {
+export async function toggleFollowUserOnServer(followerId: string, followingId: string): Promise<{ success: boolean; following: boolean; followersCount: number; blocked?: boolean; error?: string }> {
   try {
     const res = await fetch('/api/db/follows', {
       method: 'POST',
@@ -1244,7 +1299,7 @@ export async function cheerFutubeShout(
 export async function toggleFutubeConnect(
   fanId: string,
   fanzoneId: string
-): Promise<{ success: boolean; isConnected: boolean; alertEnabled: boolean; squadCount: number }> {
+): Promise<{ success: boolean; isConnected: boolean; alertEnabled: boolean; squadCount: number; blocked?: boolean; error?: string }> {
   try {
     const res = await fetch('/api/futube/connects/toggle', {
       method: 'POST',
@@ -1310,17 +1365,6 @@ export async function saveToMatchdayPack(
     return await res.json();
   } catch {
     return { success: false };
-  }
-}
-
-export async function fetchFutubeCaptions(videoId: string): Promise<any[]> {
-  try {
-    const res = await fetch(`/api/futube/captions/${encodeURIComponent(videoId)}`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data.cues) ? data.cues : [];
-  } catch {
-    return [];
   }
 }
 

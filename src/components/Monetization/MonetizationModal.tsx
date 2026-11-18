@@ -9,7 +9,6 @@ import {
   Building,
   CheckCircle2,
   X,
-  Sparkles,
   Zap,
   BarChart3,
   Calendar,
@@ -137,7 +136,7 @@ export const MonetizationModal: React.FC<MonetizationModalProps> = ({
         </div>
       </div>
 
-      {/* Google AI Studio Monetization Intelligence Engine */}
+      {/* Creator Revenue Optimization Engine */}
       <div className="p-4 rounded-3xl bg-white dark:bg-[#161b22] border border-slate-200/80 dark:border-white/10 shadow-sm space-y-3">
         <div className="flex items-center justify-between">
           <div>

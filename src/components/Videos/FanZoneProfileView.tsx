@@ -23,6 +23,7 @@ import {
 } from '../../services/supabaseClient';
 import { FutfieldTubeLogo } from './FutfieldTubeLogo';
 import { haptics } from '../../utils/haptics';
+import { isCreatorEmail, isCreatorTarget } from '../../utils/creatorGuard';
 
 interface FanZoneProfileViewProps {
   usernameOrHandle: string;
@@ -73,8 +74,8 @@ export const FanZoneProfileView: React.FC<FanZoneProfileViewProps> = ({
             username: norm.replace(/^@/, ''),
             handle: norm,
             name: first?.fanzoneName || first?.creator?.name || `${norm.replace(/^@/, '')} FanZone`,
-            avatar: first?.fanzoneAvatar || first?.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
-            bannerUrl: first?.fanzoneBanner || '/assets/aistudio/futfield_stadium_hero_banner.png',
+            avatar: first?.fanzoneAvatar || first?.creator?.avatar || '/futfield-logo.jpg',
+            bannerUrl: first?.fanzoneBanner || '/og-image.jpg',
             bio: first?.fanzoneBio || 'Gunners for life — Matchday highlights, tactical breakdowns & Quick Kicks ⚡',
             favoriteClub: first?.clubTag || 'Arsenal',
             squadCount: first?.squadCount || 1,
@@ -103,6 +104,24 @@ export const FanZoneProfileView: React.FC<FanZoneProfileViewProps> = ({
     setTogglingConnect(true);
     const res = await toggleFutubeConnect(user.id, profile.handle);
     setTogglingConnect(false);
+    if (res.blocked) {
+      setProfile((prev) =>
+        prev
+          ? {
+              ...prev,
+              isConnected: true,
+              alertEnabled: res.alertEnabled,
+              squadCount: res.squadCount || prev.squadCount,
+            }
+          : prev
+      );
+      addNotification({
+        title: 'Official Creator Protected 🔒',
+        body: res.error || 'Every account automatically follows the official Futfield Creator account.',
+        type: 'system',
+      });
+      return;
+    }
     if (res.success) {
       setProfile((prev) =>
         prev
@@ -222,12 +241,14 @@ export const FanZoneProfileView: React.FC<FanZoneProfileViewProps> = ({
                 onClick={handleToggleConnect}
                 disabled={togglingConnect}
                 className={`min-h-[42px] px-5 py-2 rounded-full font-extrabold text-xs flex items-center gap-1.5 transition-all active:scale-95 ${
-                  profile.isConnected
+                  profile.isConnected || (isCreatorTarget(profile.handle) && !isCreatorEmail(user.email))
                     ? 'bg-slate-200 dark:bg-white/15 text-slate-900 dark:text-white border border-slate-300 dark:border-white/20'
                     : 'bg-[#00C853] hover:bg-[#00b248] text-black shadow-md shadow-[#00C853]/25'
                 }`}
               >
-                {profile.isConnected ? (
+                {isCreatorTarget(profile.handle) && !isCreatorEmail(user.email) ? (
+                  <span>Connected · Official 🔒</span>
+                ) : profile.isConnected ? (
                   <span>Connected ✓</span>
                 ) : (
                   <span>Connect ⚡</span>
@@ -331,15 +352,15 @@ export const FanZoneProfileView: React.FC<FanZoneProfileViewProps> = ({
                     <img
                       src={clip.thumbnailUrl}
                       alt={clip.title}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      className="w-full h-full object-contain bg-black transform-gpu"
                     />
                   ) : (
                     <video
-                      src={`${clip.videoUrl}#t=0.4`}
+                      src={clip.videoUrl}
                       muted
                       playsInline
                       preload="metadata"
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain bg-black transform-gpu"
                     />
                   )}
                   <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/80 text-white text-[10px] font-mono font-bold">
@@ -385,15 +406,15 @@ export const FanZoneProfileView: React.FC<FanZoneProfileViewProps> = ({
                   <img
                     src={kick.thumbnailUrl}
                     alt={kick.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    className="w-full h-full object-contain bg-black transform-gpu"
                   />
                 ) : (
                   <video
-                    src={`${kick.videoUrl}#t=0.3`}
+                    src={kick.videoUrl}
                     muted
                     playsInline
                     preload="metadata"
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain bg-black transform-gpu"
                   />
                 )}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-transparent" />

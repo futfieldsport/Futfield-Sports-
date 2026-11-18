@@ -82,7 +82,7 @@ export function resolvePathFromAppState(params: {
     return params.activeBlogSlug ? `/blog/${encodeURIComponent(params.activeBlogSlug)}` : '/blog';
   }
   if (params.activeTab === 'profile') {
-    const handle = params.viewingProfileUserId || '@futfield';
+    const handle = params.viewingProfileUserId || '@fan';
     return `/profile/${encodeURIComponent(handle)}`;
   }
   if (params.activeTab === 'support') {
@@ -214,10 +214,10 @@ export function buildRouteSeoConfig(params: {
   if (params.activeTab === 'menu' || params.activeTab === 'studio') {
     return {
       path: '/features',
-      title: clampTitle('Futfield Features | Live Chat, Futfield Tube & Tactical Hub'),
+      title: clampTitle('Futfield Features | Matchday Predictor, Trivia & Tube'),
       description:
-        'Explore Futfield football app features: Futfield Tube Quick Kicks, tactical formation boards, player scout & live match rooms.',
-      keywords: `football tactical studio, player scout, ${DEFAULT_SEO_KEYWORDS}`,
+        'Explore Futfield football app features: Futfield Tube Quick Kicks, Matchday Predictor League, Football IQ Arena trivia & live match rooms.',
+      keywords: `matchday predictor, football trivia, ${DEFAULT_SEO_KEYWORDS}`,
     };
   }
 
@@ -259,7 +259,7 @@ export function buildRouteSeoConfig(params: {
   }
 
   if (params.activeTab === 'profile') {
-    const cleanHandle = (params.viewingProfileUserId || '@futfield').replace(/^@?/, '@');
+    const cleanHandle = (params.viewingProfileUserId || '@fan').replace(/^@?/, '@');
     return {
       path: `/profile/${encodeURIComponent(cleanHandle)}`,
       title: clampTitle(`${cleanHandle} Profile | Futfield Football Fan App`),

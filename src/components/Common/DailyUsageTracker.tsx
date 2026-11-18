@@ -112,7 +112,7 @@ export const DailyUsageTracker: React.FC<DailyUsageTrackerProps> = ({ onUpgradeC
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-white">
               <Video className="w-3.5 h-3.5 text-blue-500" />
-              <span>PitchReels</span>
+              <span>Quick Kicks</span>
             </div>
             <span className="text-xs font-mono tabular-nums font-bold text-slate-700 dark:text-white/80">
               {isProUser ? 'Unlimited' : `${usage.videos} / ${maxVideos}`}
@@ -127,7 +127,7 @@ export const DailyUsageTracker: React.FC<DailyUsageTrackerProps> = ({ onUpgradeC
             />
           </div>
           <span className="text-[11px] text-slate-500 dark:text-white/55 tabular-nums block">
-            {isProUser ? 'Unlimited 9:16 PitchReels unlocked' : `${Math.max(0, maxVideos - usage.videos)} left today on Free`}
+            {isProUser ? 'Unlimited 9:16 Quick Kicks unlocked' : `${Math.max(0, maxVideos - usage.videos)} left today on Free`}
           </span>
         </div>
 

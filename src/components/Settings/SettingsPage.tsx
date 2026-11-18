@@ -32,7 +32,7 @@ import {
   PlayCircle,
   Globe,
   Sliders,
-  BrainCircuit,
+  Activity,
   Crown,
   CreditCard,
   FileText,
@@ -40,6 +40,10 @@ import {
   BookOpen,
   MessageSquare,
   Mail,
+  Film,
+  Play,
+  Plus,
+  Share2,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { TOP_10_LEAGUES } from '../../data/top10LeaguesPlayers';
@@ -51,6 +55,8 @@ import { fetchCopyrightEngineStatus } from '../../services/supabaseClient';
 import { SubscriptionPage } from '../Subscription/SubscriptionPage';
 import { DailyUsageTracker } from '../Common/DailyUsageTracker';
 import { formatTodayFull } from '../../utils/dateFormat';
+import { buildVideoShareUrl } from '../../utils/share';
+import { isCreatorEmail, isReservedFutfieldText } from '../../utils/creatorGuard';
 
 interface EngineStatusData {
   engine: string;
@@ -125,6 +131,12 @@ export const SettingsPage: React.FC = () => {
     addFanPoints,
     addNotification,
     openSupportLegalPage,
+    videos,
+    deleteVideo,
+    openTubeUpload,
+    setTubeWatchVideoId,
+    setTubeSubView,
+    openShareSheet,
   } = useFootball();
 
   const todayFull = formatTodayFull();
@@ -136,8 +148,30 @@ export const SettingsPage: React.FC = () => {
   } = useHaptics();
 
   const [activeSection, setActiveSection] = useState<
-    'account' | 'subscription' | 'notifications' | 'appearance' | 'data' | 'engine' | 'privacy' | 'about'
-  >('account');
+    'account' | 'content' | 'subscription' | 'notifications' | 'appearance' | 'data' | 'engine' | 'privacy' | 'about'
+  >(() => {
+    try {
+      const target = sessionStorage.getItem('futfield_settings_section');
+      if (target === 'content') {
+        sessionStorage.removeItem('futfield_settings_section');
+        return 'content';
+      }
+    } catch {}
+    return 'account';
+  });
+  const [confirmDeleteVideoId, setConfirmDeleteVideoId] = useState<string | null>(null);
+
+  const myUploadedVideos = React.useMemo(() => {
+    const userHandleLower = (user.handle || '').toLowerCase();
+    return videos.filter((v) => {
+      if (v.userId && user.id && v.userId === user.id) return true;
+      if (userHandleLower && (v.fanzoneHandle || '').toLowerCase() === userHandleLower) return true;
+      if (userHandleLower && (v.creator?.handle || '').toLowerCase() === userHandleLower) return true;
+      if (user.name && v.creator?.name === user.name) return true;
+      if (v.id.startsWith('vid_upload')) return true;
+      return false;
+    });
+  }, [videos, user.id, user.handle, user.name]);
   const [copyrightStats, setCopyrightStats] = useState<{
     engine: string;
     activeRulesCount: number;
@@ -160,6 +194,7 @@ export const SettingsPage: React.FC = () => {
   const [editClub, setEditClub] = useState(user.favoriteClub);
   const [editCountry, setEditCountry] = useState(user.favoriteCountry);
   const [saveAccountSuccess, setSaveAccountSuccess] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
 
   useEffect(() => {
     setEditName(user.name);
@@ -223,8 +258,13 @@ export const SettingsPage: React.FC = () => {
 
   const handleSaveAccount = (e: React.FormEvent) => {
     e.preventDefault();
+    setAccountError(null);
     const cleanName = editName.trim();
     if (!cleanName) return;
+    if (!isCreatorEmail(user.email) && isReservedFutfieldText(cleanName)) {
+      setAccountError('The name "Futfield" is strictly reserved for the official Futfield Creator account.');
+      return;
+    }
     haptics.success();
     updateUser({
       name: cleanName,
@@ -385,6 +425,13 @@ export const SettingsPage: React.FC = () => {
             {[
               { id: 'account', label: 'Account', icon: User, badge: user.isAuthenticated ? 'Verified' : 'Guest' },
               {
+                id: 'content',
+                label: 'Content Settings',
+                icon: Film,
+                highlight: true,
+                badge: `${myUploadedVideos.length} Clips`,
+              },
+              {
                 id: 'subscription',
                 label: 'Pro Pass',
                 icon: Crown,
@@ -530,8 +577,8 @@ export const SettingsPage: React.FC = () => {
                     </div>
                     <div className="text-[11px] text-slate-500 dark:text-white/60">
                       {user.isPro
-                        ? 'Unlimited Posts, PitchReels & Match Rooms active via Paystack'
-                        : 'Free tier: 3 posts/day · 1 PitchReel/day · 5 room chats/day. Upgrade from $7.20/mo.'}
+                        ? 'Unlimited Posts, Futfield Tube & Match Rooms active via Paystack'
+                        : 'Free tier: 3 posts/day · 1 Quick Kick/day · 5 room chats/day. Upgrade from $7.20/mo.'}
                     </div>
                   </div>
                 </div>
@@ -551,6 +598,11 @@ export const SettingsPage: React.FC = () => {
 
               {/* Edit Account Form */}
               <form onSubmit={handleSaveAccount} className="space-y-3.5">
+                {accountError && (
+                  <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-300 text-xs font-bold">
+                    {accountError}
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-700 dark:text-white/70">Display Name</label>
@@ -709,6 +761,183 @@ export const SettingsPage: React.FC = () => {
                       </button>
                     )}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SECTION: CONTENT SETTINGS — UPLOADED VIDEOS LIST & DELETE */}
+          {activeSection === 'content' && (
+            <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Film className="w-4 h-4 text-emerald-600 dark:text-[#00E676]" />
+                    <span>Content Settings · Uploaded Videos</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-white/55">
+                    View, play, share, or delete your uploaded Futfield Tube clips and Quick Kicks
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    haptics.light();
+                    setActiveTab('videos');
+                    openTubeUpload();
+                  }}
+                  className="min-h-[40px] px-4 py-1.5 rounded-full bg-[#00E676] hover:bg-[#00c864] text-black font-black text-xs flex items-center gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-4 h-4 stroke-[3]" />
+                  <span>Upload Clip</span>
+                </button>
+              </div>
+
+              {myUploadedVideos.length === 0 ? (
+                <div className="py-10 px-4 rounded-2xl bg-slate-50 dark:bg-black/35 border border-slate-200/70 dark:border-white/10 text-center space-y-2.5">
+                  <Film className="w-8 h-8 text-[#00E676] mx-auto" />
+                  <h3 className="font-display font-extrabold text-sm text-slate-900 dark:text-white">
+                    No uploaded videos yet
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-white/55 max-w-sm mx-auto">
+                    Any clip or Quick Kick you upload to Futfield Tube will appear here so you can manage or delete it anytime.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      haptics.light();
+                      setActiveTab('videos');
+                      openTubeUpload();
+                    }}
+                    className="min-h-[40px] px-5 py-2 rounded-full bg-[#00E676] text-black font-black text-xs inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Upload First Video</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {myUploadedVideos.map((vid) => {
+                    const isQuickKick = Boolean(vid.isQuickKick || vid.aspectRatio === '9:16');
+                    const watchesCount = Number(vid.watches ?? vid.views ?? 0);
+                    const cheersCount = Number(vid.cheers ?? vid.likes ?? 0);
+                    return (
+                      <div
+                        key={vid.id}
+                        className="p-3 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200/80 dark:border-white/10 flex flex-col sm:flex-row sm:items-center gap-3"
+                      >
+                        <div
+                          onClick={() => {
+                            haptics.light();
+                            setTubeWatchVideoId(vid.id);
+                            setTubeSubView(isQuickKick ? 'kicks' : 'watch');
+                            setActiveTab('videos');
+                          }}
+                          className="relative w-full sm:w-36 aspect-video rounded-xl overflow-hidden bg-black shrink-0 cursor-pointer border border-white/10"
+                        >
+                          {vid.thumbnailUrl ? (
+                            <img
+                              src={vid.thumbnailUrl}
+                              alt={vid.title}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-contain bg-black"
+                            />
+                          ) : vid.videoUrl ? (
+                            <video
+                              src={vid.videoUrl}
+                              muted
+                              playsInline
+                              preload="metadata"
+                              className="w-full h-full object-contain bg-black"
+                            />
+                          ) : null}
+                          <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 text-white text-[10px] font-mono font-bold">
+                            {vid.duration || '0:30'}
+                          </span>
+                          {isQuickKick && (
+                            <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-[#00E676] text-black text-[9px] font-black">
+                              Quick Kick
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <h3 className="font-display font-extrabold text-xs sm:text-sm text-slate-900 dark:text-white line-clamp-2">
+                            {vid.title}
+                          </h3>
+                          <p className="text-[11px] text-slate-500 dark:text-white/60 font-mono">
+                            {watchesCount} Watches · 🔥 {cheersCount} · {vid.privacy || 'Public'}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                haptics.light();
+                                setTubeWatchVideoId(vid.id);
+                                setTubeSubView(isQuickKick ? 'kicks' : 'watch');
+                                setActiveTab('videos');
+                              }}
+                              className="min-h-[36px] px-3 py-1 rounded-xl bg-[#00E676]/15 hover:bg-[#00E676]/25 text-emerald-700 dark:text-[#00E676] font-bold text-xs flex items-center gap-1"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>Watch</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openShareSheet({
+                                  kind: 'video',
+                                  targetId: vid.id,
+                                  title: vid.title,
+                                  text: `Watch "${vid.title}" on Futfield Tube!`,
+                                  url: buildVideoShareUrl(vid.id),
+                                  previewImage: vid.thumbnailUrl,
+                                  videoUrl: vid.videoUrl,
+                                })
+                              }
+                              className="min-h-[36px] px-3 py-1 rounded-xl bg-slate-200/80 dark:bg-white/10 text-slate-800 dark:text-white font-bold text-xs flex items-center gap-1"
+                            >
+                              <Share2 className="w-3.5 h-3.5" />
+                              <span>Share</span>
+                            </button>
+
+                            {confirmDeleteVideoId === vid.id ? (
+                              <div className="flex items-center gap-1.5 ml-auto">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    await deleteVideo(vid.id);
+                                    setConfirmDeleteVideoId(null);
+                                  }}
+                                  className="min-h-[36px] px-3 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs"
+                                >
+                                  Confirm Delete
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteVideoId(null)}
+                                  className="min-h-[36px] px-2.5 py-1 rounded-xl bg-slate-200 dark:bg-white/15 text-slate-800 dark:text-white text-xs font-bold"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteVideoId(vid.id)}
+                                className="min-h-[36px] px-3 py-1 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold text-xs flex items-center gap-1 ml-auto"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Delete</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1165,25 +1394,25 @@ export const SettingsPage: React.FC = () => {
                     <Database className="w-3.5 h-3.5 text-[#00E676]" />
                   </div>
                   <div className="font-extrabold text-sm text-slate-900 dark:text-white">
-                    {engineStatus?.supabaseConnected ? 'Supabase Cloud Auth & DB' : 'Realtime SSE & Local Store'}
+                    {engineStatus?.supabaseConnected ? 'Futfield PitchCloud Auth & Vault' : 'Realtime Live & Local Store'}
                   </div>
                   <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
-                    {engineStatus?.supabaseConnected ? 'Connected via server.ts' : 'Active via Express SSE stream'}
+                    {engineStatus?.supabaseConnected ? 'Synced via PitchCloud' : 'Active via Live Stadium stream'}
                   </div>
                   <div className="text-[10px] text-slate-500 dark:text-white/50 pt-1 border-t border-slate-200/60 dark:border-white/5">
-                    Profiles, posts, reels analytics &amp; match chats synced in real time
+                    Profiles, posts, clips analytics &amp; match chats synced in real time
                   </div>
                 </div>
 
-                {/* Tactical IQ Core */}
+                {/* Futfield Tactical Engine */}
                 <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200/70 dark:border-white/5 space-y-1.5">
                   <div className="flex justify-between items-center text-xs text-slate-500 dark:text-white/60">
-                    <span>Football Intelligence</span>
-                    <BrainCircuit className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Match Telemetry</span>
+                    <Activity className="w-3.5 h-3.5 text-emerald-500" />
                   </div>
-                  <div className="font-extrabold text-sm text-slate-900 dark:text-white">Tactical IQ Intelligence Engine</div>
+                  <div className="font-extrabold text-sm text-slate-900 dark:text-white">Futfield PitchIQ Engine</div>
                   <div className="text-[11px] text-emerald-600 dark:text-[#00E676] font-mono">
-                    {engineStatus?.aiAssistantActive ? 'Active on server' : 'Tactical & Translation Rules Active'}
+                    {engineStatus?.aiAssistantActive ? 'Active on PitchCloud' : 'Tactical & Translation Rules Active'}
                   </div>
                   <div className="text-[10px] text-slate-500 dark:text-white/50 pt-1 border-t border-slate-200/60 dark:border-white/5">
                     Tactical xG summaries, win probabilities, and multi-language translation

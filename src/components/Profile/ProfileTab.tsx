@@ -30,7 +30,7 @@ import {
   Loader2,
   ExternalLink,
   RotateCcw,
-  Trash2,
+  Lock,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
@@ -38,12 +38,17 @@ import { ClubLogo } from '../Common/ClubLogo';
 import { DailyUsageTracker } from '../Common/DailyUsageTracker';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
 import { uploadFileToBackend, formatBytesToMb } from '../../utils/mediaUpload';
+import { buildShareUrl } from '../../utils/share';
+import {
+  isCreatorEmail,
+  isCreatorTarget,
+  isReservedFutfieldText,
+} from '../../utils/creatorGuard';
 import {
   syncUserProfile,
   fetchUserProfileFromServer,
   fetchUserPointsHistory,
   fetchUserFollowDetails,
-  toggleFollowUserOnServer,
 } from '../../services/supabaseClient';
 
 export const ProfileTab: React.FC = () => {
@@ -62,9 +67,7 @@ export const ProfileTab: React.FC = () => {
     toggleFollowUser,
     openShareSheet,
     openVideoInReels,
-    deleteVideo,
   } = useFootball();
-  const [confirmDeleteVideoId, setConfirmDeleteVideoId] = useState<string | null>(null);
 
   const isOwnProfile = !viewingProfileUserId || viewingProfileUserId === user.id || viewingProfileUserId === user.handle;
 
@@ -96,6 +99,7 @@ export const ProfileTab: React.FC = () => {
   const [editLocation, setEditLocation] = useState(user.location || '');
   const [editWebsite, setEditWebsite] = useState(user.website || '');
   const [editAvatar, setEditAvatar] = useState(user.avatar);
+  const [editProfileError, setEditProfileError] = useState<string | null>(null);
   const [avatarUploadStatus, setAvatarUploadStatus] = useState<UploadSplashStatus>('idle');
   const [avatarUploadProgress, setAvatarUploadProgress] = useState(0);
   const [avatarUploadSizeMb, setAvatarUploadSizeMb] = useState(0);
@@ -136,7 +140,7 @@ export const ProfileTab: React.FC = () => {
         id: viewingProfileUserId,
         name: viewingProfileUserId?.startsWith('@') ? viewingProfileUserId.replace('@', '') : 'Supporter',
         handle: viewingProfileUserId?.startsWith('@') ? viewingProfileUserId : `@${viewingProfileUserId}`,
-        avatar: '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg',
+        avatar: '/futfield-logo.jpg',
         bio: 'Football supporter on FUTFIELD ⚽',
         favoriteClub: 'Not Set',
         favoriteClubCrest: '⚽',
@@ -149,6 +153,13 @@ export const ProfileTab: React.FC = () => {
         postsCount: 0,
         isFollowing: false,
       };
+
+  const isViewingCreator =
+    isCreatorTarget(displayProfile.handle) ||
+    isCreatorTarget(displayProfile.id) ||
+    Boolean((displayProfile as any).isOfficialCreator);
+  const isCreatorFollowLocked = !isOwnProfile && isViewingCreator && !isCreatorEmail(user.email);
+  const effectiveFollowing = isCreatorFollowLocked ? true : isFollowingOptimistic;
 
   // Real filtered items
   const userPosts = isOwnProfile
@@ -221,6 +232,11 @@ export const ProfileTab: React.FC = () => {
   // Toggle follow other user
   const handleToggleFollow = async () => {
     const targetId = displayProfile.id || displayProfile.handle;
+    if (isCreatorFollowLocked) {
+      await toggleFollowUser(targetId);
+      setIsFollowingOptimistic(true);
+      return;
+    }
     const nextState = !isFollowingOptimistic;
     setIsFollowingOptimistic(nextState);
 
@@ -263,12 +279,23 @@ export const ProfileTab: React.FC = () => {
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
+    setEditProfileError(null);
 
+    const cleanName = editName.trim() || user.name;
     const cleanHandle = editHandle.trim().startsWith('@') ? editHandle.trim() : `@${editHandle.trim()}`;
+
+    if (
+      !isCreatorEmail(user.email) &&
+      (isReservedFutfieldText(cleanName) || isReservedFutfieldText(cleanHandle))
+    ) {
+      setEditProfileError('The name "Futfield" is strictly reserved for the official Futfield Creator account.');
+      return;
+    }
+
     const chosenClub = POPULAR_TOP_5_CLUBS.find(c => c.name.toLowerCase() === editClub.toLowerCase());
 
     const updatedProfile = {
-      name: editName.trim() || user.name,
+      name: cleanName,
       handle: cleanHandle,
       bio: editBio.trim(),
       favoriteClub: editClub,
@@ -290,13 +317,10 @@ export const ProfileTab: React.FC = () => {
   };
 
   const handleShareProfile = () => {
-    const cleanHandle = (displayProfile.handle || '@futfield').replace(/^@?/, '@');
+    const cleanHandle = (displayProfile.handle || '@fan').replace(/^@?/, '@');
     const shareTitle = `${displayProfile.name} (${cleanHandle}) on FUTFIELD`;
     const shareText = `Follow ${displayProfile.name} on FUTFIELD for matchday takes, highlights & live football chat!`;
-    const path = `/profile/${encodeURIComponent(cleanHandle)}`;
-    const url = typeof window !== 'undefined' && window.location?.origin
-      ? `${window.location.origin}${path}`
-      : `https://futfieldsport.com.ng${path}`;
+    const url = buildShareUrl(`/profile/${encodeURIComponent(cleanHandle)}`);
 
     openShareSheet({
       kind: 'profile',
@@ -608,7 +632,10 @@ export const ProfileTab: React.FC = () => {
           {isOwnProfile ? (
             <>
               <button
-                onClick={() => setIsEditing(true)}
+                onClick={() => {
+                  setEditProfileError(null);
+                  setIsEditing(true);
+                }}
                 className="flex-1 min-h-[44px] py-2 rounded-full bg-slate-900 dark:bg-white text-white dark:text-black font-extrabold text-xs shadow-sm hover:opacity-90 transition-opacity"
               >
                 Edit Profile
@@ -626,12 +653,19 @@ export const ProfileTab: React.FC = () => {
               <button
                 onClick={handleToggleFollow}
                 className={`flex-1 min-h-[44px] py-2 rounded-full font-extrabold text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm active:scale-95 ${
-                  isFollowingOptimistic
+                  isCreatorFollowLocked
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-[#00E676] border border-emerald-500/40'
+                    : effectiveFollowing
                     ? 'bg-slate-200 dark:bg-white/15 text-slate-900 dark:text-white border border-slate-300 dark:border-white/10'
                     : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'
                 }`}
               >
-                {isFollowingOptimistic ? (
+                {isCreatorFollowLocked ? (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Following · Official Creator</span>
+                  </>
+                ) : effectiveFollowing ? (
                   <>
                     <UserCheck className="w-3.5 h-3.5" />
                     <span>Following</span>
@@ -774,7 +808,7 @@ export const ProfileTab: React.FC = () => {
               <h4 className="font-extrabold text-sm text-slate-800 dark:text-white">No videos uploaded yet</h4>
               <p className="text-xs text-slate-500 dark:text-white/50">
                 {isOwnProfile
-                  ? 'Upload your skills or goal celebrations to PitchReels!'
+                  ? 'Upload your skills or goal celebrations to Futfield Tube!'
                   : `${displayProfile.name} has not uploaded any video highlights yet.`}
               </p>
               {isOwnProfile && (
@@ -782,7 +816,7 @@ export const ProfileTab: React.FC = () => {
                   onClick={() => setActiveTab('videos')}
                   className="mt-2 px-4 py-1.5 rounded-full bg-blue-600 text-white font-extrabold text-xs"
                 >
-                  Upload to PitchReels
+                  Upload to Futfield Tube
                 </button>
               )}
             </div>
@@ -807,15 +841,15 @@ export const ProfileTab: React.FC = () => {
                           loading="lazy"
                           decoding="async"
                           referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          className="w-full h-full object-contain bg-black transform-gpu"
                         />
                       ) : v.videoUrl ? (
                         <video
-                          src={`${v.videoUrl}#t=0.5`}
+                          src={v.videoUrl}
                           preload="metadata"
                           muted
                           playsInline
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain bg-black transform-gpu"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-slate-900 text-white/40">
@@ -837,43 +871,19 @@ export const ProfileTab: React.FC = () => {
                       </div>
                       {canDelete && (
                         <div className="pt-1 border-t border-slate-100 dark:border-white/5">
-                          {confirmDeleteVideoId === v.id ? (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteVideo(v.id);
-                                  setConfirmDeleteVideoId(null);
-                                }}
-                                className="flex-1 min-h-[34px] px-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold"
-                              >
-                                Confirm Delete
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setConfirmDeleteVideoId(null);
-                                }}
-                                className="min-h-[34px] px-2.5 rounded-lg bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white text-[11px] font-semibold"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setConfirmDeleteVideoId(v.id);
-                              }}
-                              className="w-full min-h-[34px] px-2.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              <span>Delete Video</span>
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              try {
+                                sessionStorage.setItem('futfield_settings_section', 'content');
+                              } catch {}
+                              setActiveTab('settings');
+                            }}
+                            className="w-full min-h-[34px] px-2.5 rounded-lg bg-slate-100 dark:bg-white/10 hover:bg-emerald-500/15 text-slate-700 dark:text-white/80 hover:text-[#00E676] text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <span>Manage in Content Settings</span>
+                          </button>
                         </div>
                       )}
                     </div>
@@ -907,7 +917,7 @@ export const ProfileTab: React.FC = () => {
                   className="flex items-center gap-2 cursor-pointer group"
                 >
                   <img
-                    src={p.author?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg'}
+                    src={p.author?.avatar || '/futfield-logo.jpg'}
                     alt={`${p.author?.name || 'Supporter'} football fan avatar`}
                     loading="lazy"
                     decoding="async"
@@ -976,6 +986,12 @@ export const ProfileTab: React.FC = () => {
               </button>
             </div>
 
+            {editProfileError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-600 dark:text-rose-300 text-[11px] font-bold">
+                {editProfileError}
+              </div>
+            )}
+
             {/* Avatar preview and change */}
             <div className="space-y-2">
               <div className="flex items-center gap-3">
@@ -1033,7 +1049,7 @@ export const ProfileTab: React.FC = () => {
                 rows={2}
                 value={editBio}
                 onChange={e => setEditBio(e.target.value)}
-                placeholder="Match observer, tactic fan, player scout..."
+                placeholder="Goals, matchdays &amp; football banter..."
                 className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white focus:outline-none"
               />
             </div>
@@ -1145,7 +1161,7 @@ export const ProfileTab: React.FC = () => {
                     <span className="font-bold font-mono tabular-nums text-emerald-700 dark:text-[#00E676]">+10 pts</span>
                   </div>
                   <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-white/5">
-                    <span>Uploading PitchReel</span>
+                    <span>Uploading Quick Kick / Clip</span>
                     <span className="font-bold font-mono tabular-nums text-emerald-700 dark:text-[#00E676]">+20 pts</span>
                   </div>
                   <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-white/5">
@@ -1186,7 +1202,7 @@ export const ProfileTab: React.FC = () => {
             <div className="flex-1 overflow-y-auto space-y-2 py-1">
               {followDetails.followingUsers.length === 0 ? (
                 <div className="text-center py-6 text-xs text-slate-500 dark:text-white/50">
-                  Not following any supporters yet. Discover creators in PitchReels and Home feed!
+                  Not following any supporters yet. Discover FanZones in Futfield Tube and Home feed!
                 </div>
               ) : (
                 followDetails.followingUsers.map((person, idx) => (

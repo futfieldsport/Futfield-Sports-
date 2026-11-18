@@ -12,15 +12,131 @@ export interface UserCountryData {
   city?: string;
 }
 
+export interface BackendGeoPlan {
+  id: 'pro' | 'vip' | 'season';
+  name: string;
+  days: number;
+  usdPrice: number;
+  usdFormatted: string;
+  effectiveMonthlyUsd: number;
+  localCurrency: string;
+  localAmount: number;
+  localFormatted: string;
+  exchangeRate: number;
+}
+
+export interface BackendGeoPricingResponse {
+  success: boolean;
+  country_code: string;
+  country_name: string;
+  city?: string;
+  currency: string;
+  exchange_rate: number;
+  stagnant_usd_base: {
+    pro: number;
+    vip: number;
+    season: number;
+    lowestMonthlyUsd: number;
+  };
+  paystack_direct_currency: string;
+  rates: Record<string, number>;
+  plans: BackendGeoPlan[];
+}
+
 export const PENDING_PAYSTACK_TX_KEY = 'futfield_pending_paystack_tx';
 
 let cachedCountry: UserCountryData | null = null;
+let cachedGeoPricing: BackendGeoPricingResponse | null = null;
+
+/**
+ * Format any stagnant USD amount dynamically into the visitor's local currency.
+ */
+export function formatLocalPriceFromUsd(
+  usdAmount: number,
+  currencyCode: string,
+  rate = 1
+): string {
+  const code = String(currencyCode || 'USD').toUpperCase();
+  const safeRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const converted = code === 'USD' ? usdAmount : usdAmount * safeRate;
+  const isWhole = ['NGN', 'KES', 'TZS', 'UGX', 'RWF', 'JPY', 'KRW', 'IDR', 'XOF', 'XAF'].includes(code);
+  const rounded = isWhole ? Math.round(converted) : +converted.toFixed(2);
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      maximumFractionDigits: isWhole ? 0 : 2,
+      minimumFractionDigits: isWhole ? 0 : 2,
+    }).format(rounded);
+  } catch {
+    return `${code} ${rounded.toLocaleString('en-US')}`;
+  }
+}
+
+/**
+ * Fetch free backend IP geolocation + live USD exchange rate pricing.
+ * Keeps base USD rates stagnant ($12 / $25 / $36) while adapting local currency display.
+ */
+export async function fetchBackendGeoPricing(
+  currencyOverride?: string
+): Promise<BackendGeoPricingResponse> {
+  if (!currencyOverride && cachedGeoPricing) return cachedGeoPricing;
+
+  try {
+    const q = currencyOverride ? `?currency=${encodeURIComponent(currencyOverride)}` : '';
+    const res = await fetch(`/api/geo/ip-pricing${q}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (res.ok) {
+      const data: BackendGeoPricingResponse = await res.json();
+      if (data?.success && data.currency) {
+        if (!currencyOverride) {
+          cachedGeoPricing = data;
+          cachedCountry = {
+            country_code: (data.country_code || 'NG').toUpperCase(),
+            country_name: data.country_name || 'Nigeria',
+            currency: data.currency,
+            city: data.city,
+          };
+        }
+        return data;
+      }
+    }
+  } catch (err) {
+    console.warn('[Paystack GeoIP Backend] Geo-pricing notice, using fallback:', err);
+  }
+
+  return {
+    success: true,
+    country_code: 'NG',
+    country_name: 'Nigeria',
+    currency: 'NGN',
+    exchange_rate: 1600,
+    stagnant_usd_base: { pro: 12, vip: 25, season: 36, lowestMonthlyUsd: 7.2 },
+    paystack_direct_currency: 'NGN',
+    rates: { USD: 1, NGN: 1600, GBP: 0.79, EUR: 0.92, GHS: 15.2, KES: 129, ZAR: 18.2 },
+    plans: [],
+  };
+}
 
 /**
  * Detect user country via backend IP geolocation tool
  */
 export async function getUserCountry(): Promise<UserCountryData> {
   if (cachedCountry) return cachedCountry;
+
+  try {
+    const geo = await fetchBackendGeoPricing();
+    if (geo?.country_code) {
+      cachedCountry = {
+        country_code: geo.country_code.toUpperCase(),
+        country_name: geo.country_name || 'Nigeria',
+        currency: geo.currency || (geo.country_code === 'NG' ? 'NGN' : 'USD'),
+        city: geo.city,
+      };
+      return cachedCountry;
+    }
+  } catch {}
 
   try {
     const res = await fetch('/api/ip-country', {
@@ -77,7 +193,7 @@ export const FREE_TIER_ALLOWANCE_SUMMARY = {
   usdPrice: 0,
   limits: [
     { label: 'Posts & Photos', value: '3 / day' },
-    { label: '9:16 PitchReels (30s Audio)', value: '1 / day' },
+    { label: '9:16 Quick Kicks', value: '1 / day' },
     { label: 'Live Match Room Chats', value: '5 msgs / day' },
   ],
 };
@@ -94,18 +210,18 @@ export const PRO_SUBSCRIPTION_PLANS: SubscriptionPricingPlan[] = [
     ngnFormatted: '₦19,200',
     usdFormatted: '$12',
     tagline: 'Remove all daily free-tier limits for 30 days',
-    description: 'Lift the 3 posts/day, 1 reel/day & 5 chat/day caps immediately with priority feeds.',
+    description: 'Lift the 3 posts/day, 1 clip/day & 5 chat/day caps immediately with priority feeds.',
     allowanceUpgrades: {
       posts: 'Unlimited Posts & HD Photos (vs 3/day Free)',
-      videos: 'Unlimited PitchReels with Sound (vs 1/day Free)',
+      videos: 'Unlimited Futfield Tube & Quick Kicks (vs 1/day Free)',
       chats: 'Unlimited Live Match Room Chat (vs 5/day Free)',
     },
     features: [
       'Unlimited Posts & Matchday Image Uploads (Free: 3/day)',
-      'Unlimited 9:16 PitchReels Videos with Sound (Free: 1/day)',
+      'Unlimited 9:16 Quick Kicks & Videos with Sound (Free: 1/day)',
+      'Exclusive Offline Video & Clip Downloads (Pro Users Only)',
       'Unlimited Live Match Room Messages & Reactions (Free: 5/day)',
-      'Priority Connected Creator Feed & Zero Ads',
-      'Instant AI Pitch Engine Tactical Summaries + +500 FP',
+      'Instant Futfield PitchIQ Tactical Summaries + +500 FP',
     ],
   },
   {
@@ -122,16 +238,16 @@ export const PRO_SUBSCRIPTION_PLANS: SubscriptionPricingPlan[] = [
     highlight: true,
     badgeColor: 'amber',
     tagline: 'Most Popular · 90 days unlimited access + Golden Verified Badge',
-    description: 'Unlimited daily posts, reels & match chats plus Creator Studio custom thumbnails & VIP perks.',
+    description: 'Unlimited daily posts, clips & match chats plus FanZone custom thumbnails & VIP perks.',
     allowanceUpgrades: {
       posts: 'Unlimited Posts + Priority Top Placement',
-      videos: 'Unlimited HD PitchReels + Custom Thumbnails',
+      videos: 'Unlimited 1080p HD Clips + Custom Thumbnails',
       chats: 'Unlimited VIP Match Chat + Golden Name Highlight',
     },
     features: [
-      'Unlimited Posts, PitchReels & Match Chats for 90 Days',
+      'Unlimited Posts, Futfield Tube Clips & Match Chats for 90 Days',
       'FUTFIELD Verified Golden Checkmark on Profile & Takes',
-      'Unlimited Custom Video Thumbnails in Creator Studio',
+      'Unlimited Custom Video Thumbnails in FanZone Studio',
       'Priority Creator Studio Analytics & Live Match Alerts',
       '+2,000 Fan Points Instant Boost ($8.33/mo effective rate)',
     ],
@@ -148,14 +264,14 @@ export const PRO_SUBSCRIPTION_PLANS: SubscriptionPricingPlan[] = [
     usdFormatted: '$36',
     savings: 'Save 40% (Best Value)',
     tagline: 'Lowest cost per month · 150 days unlimited creator & matchday access',
-    description: 'Full 5-month unlimited access to every post, PitchReel, match room, and VIP trophy badge.',
+    description: 'Full 5-month unlimited access to every post, Futfield Tube clip, match room, and VIP trophy badge.',
     allowanceUpgrades: {
       posts: 'Unlimited Posts + Live Matchday Poll Authoring',
-      videos: 'Unlimited Ultra HD Reels + Studio Priority',
+      videos: 'Unlimited Ultra HD Clips + Zero Ads',
       chats: 'Unlimited Chats + VIP Room Pinning Privileges',
     },
     features: [
-      'Full 150-Day Unlimited Posts, PitchReels & Match Rooms',
+      'Full 150-Day Unlimited Posts, Futfield Tube Clips & Match Rooms',
       'Lowest Monthly Rate ($7.20/mo · Save 40% vs 1-Month Pass)',
       'Exclusive Golden Trophy Icon + VIP Room Pinning',
       'Direct Access to Author Matchday Live Polls',
@@ -196,7 +312,7 @@ export interface StartSubscriptionOptions {
   email: string;
   userId: string;
   country: string;
-  preferredCurrency?: 'NGN' | 'USD';
+  preferredCurrency?: string;
   planType: 'pro' | 'vip' | 'season';
   checkoutMode?: 'popup' | 'redirect';
   onSuccess: (data: { reference: string; planType: string; expiresAt: string; bonusPoints?: number; currency?: string; amount?: number }) => void;

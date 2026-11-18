@@ -306,13 +306,6 @@ export interface FanZoneBattle {
   userVotedSide?: 'left' | 'right' | null;
 }
 
-export interface FutubeCaptionCue {
-  startSec: number;
-  endSec: number;
-  english: string;
-  pidgin: string;
-}
-
 export interface VideoItem {
   id: string;
   userId?: string;

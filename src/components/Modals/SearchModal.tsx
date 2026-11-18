@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Search, X, Users, Calendar, FileText, ArrowRight, PlaySquare, Trophy } from 'lucide-react';
+import { Search, X, Users, Calendar, FileText, ArrowRight, PlaySquare, Target, Brain } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
-import { TOP_10_LEAGUE_PLAYERS } from '../../data/top10LeaguesPlayers';
 import { ClubLogo } from '../Common/ClubLogo';
 
 interface Props {
@@ -18,7 +17,7 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setActiveTab,
     openMatchRoom,
     setSelectedCommunity,
-    setPlayerScoutModalOpen,
+    openHubFeature,
     setActiveVideoIndex,
   } = useFootball();
   const [query, setQuery] = useState('');
@@ -47,15 +46,34 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
       )
     : matches.slice(0, 3);
 
-  const matchedPlayers = q
-    ? TOP_10_LEAGUE_PLAYERS.filter(
-        pl =>
-          pl.name.toLowerCase().includes(q) ||
-          pl.club.toLowerCase().includes(q) ||
-          pl.league.toLowerCase().includes(q) ||
-          pl.nationality.toLowerCase().includes(q)
-      ).slice(0, 6)
-    : TOP_10_LEAGUE_PLAYERS.slice(0, 4);
+  const hubTools = [
+    {
+      id: 'predictor' as const,
+      title: 'Matchday Predictor League',
+      subtitle: 'Predict match scores & climb the leaderboard',
+      icon: Target,
+      color: 'text-emerald-600 dark:text-[#00E676] bg-emerald-500/10',
+    },
+    {
+      id: 'arena' as const,
+      title: 'Football IQ Arena',
+      subtitle: 'Timed trivia challenges & live fan polls',
+      icon: Brain,
+      color: 'text-amber-500 bg-amber-500/10',
+    },
+  ];
+
+  const matchedHubTools = q
+    ? hubTools.filter(
+        t =>
+          t.title.toLowerCase().includes(q) ||
+          t.subtitle.toLowerCase().includes(q) ||
+          q.includes('predict') ||
+          q.includes('trivia') ||
+          q.includes('quiz') ||
+          q.includes('poll')
+      )
+    : hubTools;
 
   const matchedVideos = q
     ? videos.filter(
@@ -85,7 +103,7 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const hasAnyResults =
     matchedMatches.length > 0 ||
-    matchedPlayers.length > 0 ||
+    matchedHubTools.length > 0 ||
     matchedVideos.length > 0 ||
     matchedCommunities.length > 0 ||
     matchedPosts.length > 0;
@@ -104,7 +122,7 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
           <Search className="w-5 h-5 text-slate-400 dark:text-white/50 shrink-0" />
           <input
             type="text"
-            placeholder="Search matches, players, reels, clubs, or posts..."
+            placeholder="Search matches, predictor, trivia, clips, clubs, or posts..."
             value={query}
             onChange={e => setQuery(e.target.value)}
             className="flex-1 bg-transparent text-slate-900 dark:text-white text-sm focus:outline-none placeholder:text-slate-400 dark:placeholder:text-white/40 min-w-0"
@@ -164,52 +182,42 @@ export const SearchModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </div>
           )}
 
-          {/* Top 10 Leagues Players */}
-          {matchedPlayers.length > 0 && (
+          {/* Matchday Hub Tools (Predictor & Trivia) */}
+          {matchedHubTools.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-500 dark:text-white/50 flex items-center gap-1.5">
-                  <Trophy className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Top 10 Leagues Players</span>
-                </span>
-                <button
-                  onClick={() => {
-                    onClose();
-                    setPlayerScoutModalOpen(true);
-                  }}
-                  className="text-[11px] font-bold text-emerald-700 dark:text-[#00E676] hover:underline"
-                >
-                  Open Scout DB
-                </button>
+              <div className="text-xs font-bold text-slate-500 dark:text-white/50 flex items-center gap-1.5">
+                <Target className="w-3.5 h-3.5 text-[#00E676]" />
+                <span>FUTFIELD Hub Games &amp; Challenges</span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {matchedPlayers.map(pl => (
-                  <button
-                    key={pl.id}
-                    onClick={() => {
-                      onClose();
-                      setPlayerScoutModalOpen(true);
-                    }}
-                    className="min-h-[52px] text-left p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 border border-slate-200/80 dark:border-white/5 flex items-center justify-between gap-2 transition-colors"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-[#00E676] font-mono text-xs font-black flex items-center justify-center shrink-0 tabular-nums">
-                        {pl.rating}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="font-bold text-xs text-slate-900 dark:text-white truncate">
-                          {pl.countryFlag} {pl.name}
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-white/50 truncate">
-                          {pl.club} · {pl.position}
+                {matchedHubTools.map(tool => {
+                  const Icon = tool.icon;
+                  return (
+                    <button
+                      key={tool.id}
+                      onClick={() => {
+                        onClose();
+                        openHubFeature(tool.id);
+                      }}
+                      className="min-h-[52px] text-left p-2.5 rounded-xl bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 border border-slate-200/80 dark:border-white/5 flex items-center justify-between gap-2 transition-colors"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${tool.color}`}>
+                          <Icon className="w-4 h-4" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="font-bold text-xs text-slate-900 dark:text-white truncate">
+                            {tool.title}
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-white/50 truncate">
+                            {tool.subtitle}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <span className="text-[10px] font-mono font-bold text-slate-600 dark:text-white/70 shrink-0 tabular-nums">
-                      {pl.stats.goals}G {pl.stats.assists}A
-                    </span>
-                  </button>
-                ))}
+                      <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

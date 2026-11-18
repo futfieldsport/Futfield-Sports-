@@ -2,7 +2,7 @@ import { Match } from '../types/football';
 
 /**
  * Generate an instant AI Match Recap via server-side /api/ai/match-recap
- * Never accesses API keys or Gemini SDK directly in the browser.
+ * Never exposes provider keys directly in the browser.
  */
 export async function generateMatchRecap(match: Match): Promise<string> {
   try {

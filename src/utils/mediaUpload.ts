@@ -76,15 +76,15 @@ export function classifyVideoDimensionsAndDuration(
 ): VideoInspectionMetadata {
   const safeDuration = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0;
   const maxQuickKickSeconds = mode === 'futube' ? 60 : 120;
-  const maxLandscapeSeconds = mode === 'futube' ? 3600 : 180;
+  const maxLandscapeSeconds = mode === 'futube' ? 3600 : 600;
 
   if (width > 0 && height > 0) {
     const ratio = width / height;
-    // Vertical / Portrait (~9:16 Quick Kick)
-    if (ratio <= 0.85) {
+    // Vertical / Portrait (9:16, 4:5, etc.)
+    if (ratio < 1.0) {
       const validationError =
         safeDuration > maxQuickKickSeconds
-          ? `Quick Kicks (vertical 9:16) must be ${maxQuickKickSeconds}s or less. Detected ${safeDuration}s.`
+          ? `Quick Kicks (vertical video) must be ${maxQuickKickSeconds}s or less. Detected ${safeDuration}s.`
           : undefined;
       return {
         duration: safeDuration,
@@ -98,33 +98,20 @@ export function classifyVideoDimensionsAndDuration(
       };
     }
 
-    // Widescreen / Landscape (~16:9)
-    if (ratio >= 1.15 || mode === 'futube') {
-      const validationError =
-        safeDuration > maxLandscapeSeconds
-          ? `16:9 Football Clips cannot exceed ${Math.round(maxLandscapeSeconds / 60)} minutes. Detected ${safeDuration}s.`
-          : undefined;
-      return {
-        duration: safeDuration,
-        width,
-        height,
-        isVertical916: false,
-        isLandscape169: true,
-        videoKind: 'video',
-        detectedAspectRatio: '16:9',
-        validationError,
-      };
-    }
-
+    // Square (1:1) & Widescreen / Landscape (16:9, 4:3, etc.)
+    const validationError =
+      safeDuration > maxLandscapeSeconds
+        ? `Video clips cannot exceed ${Math.round(maxLandscapeSeconds / 60)} minutes. Detected ${safeDuration}s.`
+        : undefined;
     return {
       duration: safeDuration,
       width,
       height,
       isVertical916: false,
-      isLandscape169: false,
-      videoKind: 'unsupported',
-      detectedAspectRatio: 'unsupported',
-      validationError: `Unsupported aspect ratio (${width}x${height}). Upload a 9:16 Vertical Quick Kick (≤ ${maxQuickKickSeconds}s) or a 16:9 Widescreen Clip.`,
+      isLandscape169: true,
+      videoKind: 'video',
+      detectedAspectRatio: '16:9',
+      validationError,
     };
   }
 

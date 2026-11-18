@@ -91,6 +91,28 @@ export function getShareOrigin(): string {
   return PROD_DOMAIN;
 }
 
+export function sanitizeShareUrl(rawUrl?: string): string {
+  if (!rawUrl || !String(rawUrl).trim()) return PROD_DOMAIN;
+  const trimmed = String(rawUrl).trim();
+  if (
+    trimmed.includes('ais-dev') ||
+    trimmed.includes('run.app') ||
+    trimmed.includes('localhost') ||
+    trimmed.includes('127.0.0.1') ||
+    trimmed.includes('aistudio') ||
+    trimmed.includes('webcontainer') ||
+    trimmed.includes('futfieldsport.com.ng')
+  ) {
+    try {
+      const parsed = new URL(trimmed);
+      return `${PROD_DOMAIN}${parsed.pathname}${parsed.search}`;
+    } catch {
+      return PROD_DOMAIN;
+    }
+  }
+  return trimmed.startsWith('http') ? trimmed : `${PROD_DOMAIN}${trimmed.startsWith('/') ? trimmed : `/${trimmed}`}`;
+}
+
 /**
  * Build a production-grade shareable URL using environment detection.
  * Dev URLs are strictly converted to PROD_DOMAIN.
@@ -98,12 +120,12 @@ export function getShareOrigin(): string {
 export function buildShareUrl(path: string = '/'): string {
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const origin = getShareOrigin();
-  return `${origin}${cleanPath}`;
+  return sanitizeShareUrl(`${origin}${cleanPath}`);
 }
 
 /**
  * Build user invite / referral link:
- * e.g. https://futfieldsports.com.ng/join/amos or https://futfieldsports.com.ng/join?code=amos
+ * e.g. https://futfieldsports.com.ng/join?code=amos
  */
 export function buildUserInviteUrl(user?: { id?: string; handle?: string; name?: string } | null): string {
   if (!user) return `${PROD_DOMAIN}/join`;

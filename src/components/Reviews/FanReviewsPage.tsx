@@ -5,7 +5,7 @@ import {
   ThumbsUp,
   ArrowLeft,
   Send,
-  Sparkles,
+  Award,
   BookOpen,
   Radio,
   CheckCircle2,
@@ -47,7 +47,7 @@ const DEFAULT_ENTRIES: FanReviewEntry[] = [
     authorName: 'Mateo R.',
     authorHandle: '@mateo_tactics',
     title: 'Why 9:16 Shorts + 16:9 Tactical Videos Separate Futfield',
-    body: 'Most apps cram highlight clips into one messy feed. Having dedicated under-2m vertical PitchReels for matchday energy and 3m 16:9 videos for pressing analysis is genius.',
+    body: 'Most apps cram highlight clips into one messy feed. Having dedicated under-2m vertical Futfield Tube Quick Kicks for matchday energy and 3m 16:9 videos for pressing analysis is genius.',
     rating: 5,
     helpfulCount: 12,
     createdAt: new Date().toISOString().slice(0, 10),
@@ -262,7 +262,7 @@ export const FanReviewsPage: React.FC = () => {
       >
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-[#00E676]" />
+            <Award className="w-3.5 h-3.5 text-[#00E676]" />
             <span>Share Your Review or Blog Post</span>
           </span>
           <div className="flex p-0.5 rounded-xl bg-slate-100 dark:bg-white/5 text-[11px] font-bold">

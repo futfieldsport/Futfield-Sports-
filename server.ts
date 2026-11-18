@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
@@ -33,12 +34,50 @@ const IS_SERVERLESS = Boolean(
   process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT
 );
 
-const DEFAULT_AVATAR = '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
-const DEFAULT_BANNER = '/assets/aistudio/IMG-20261102-WA2735_f2548d41.jpg';
+const DEFAULT_AVATAR = '/futfield-logo.jpg';
+const DEFAULT_BANNER = '/og-image.jpg';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUuid(val: any): boolean {
   return typeof val === 'string' && UUID_REGEX.test(val.trim());
 }
+
+const CREATOR_EMAIL = 'futfieldsport@gmail.com';
+const CREATOR_ID = 'futfield_creator_official';
+const CREATOR_HANDLE = '@futfield';
+const CREATOR_NAME = 'Futfield';
+
+function isCreatorEmail(email?: string | null): boolean {
+  return String(email || '').trim().toLowerCase() === CREATOR_EMAIL;
+}
+
+function isReservedFutfieldText(value?: string | null): boolean {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  return /fut\s*[-_.]?\s*field/i.test(raw);
+}
+
+function isCreatorTarget(identifier?: string | null): boolean {
+  const norm = String(identifier || '').trim().toLowerCase();
+  if (!norm) return false;
+  if (
+    norm === CREATOR_ID ||
+    norm === CREATOR_HANDLE ||
+    norm === 'futfield' ||
+    norm === CREATOR_EMAIL
+  ) {
+    return true;
+  }
+  const prof =
+    inMemoryProfiles[identifier || ''] ||
+    Object.values(inMemoryProfiles).find(
+      (p: any) =>
+        String(p?.id || '').toLowerCase() === norm ||
+        String(p?.handle || '').toLowerCase() === norm ||
+        String(p?.email || '').toLowerCase() === norm
+    );
+  return Boolean(prof && isCreatorEmail(prof.email));
+}
+
 
 const portArgIndex = process.argv.indexOf('--port');
 const cliPort = portArgIndex !== -1 ? parseInt(process.argv[portArgIndex + 1], 10) : NaN;
@@ -57,7 +96,142 @@ const MEDIA_REGISTRY_FILE = path.join(UPLOADS_DIR, 'media-registry.json');
 const FEED_STORE_FILE = path.join(UPLOADS_DIR, 'feed-store.json');
 const SUPPORT_TICKETS_FILE = path.join(UPLOADS_DIR, 'support-tickets.json');
 
+const UPLOADS_ROOT_RESOLVED = path.resolve(UPLOADS_DIR);
+function resolveSafeUploadPath(relPath: string): string | null {
+  const cleanRel = String(relPath || '')
+    .replace(/^\/uploads\//, '')
+    .replace(/^\/+/, '');
+  if (!cleanRel || cleanRel.includes('\0')) return null;
+  const candidate = path.resolve(UPLOADS_ROOT_RESOLVED, cleanRel);
+  if (!candidate.startsWith(UPLOADS_ROOT_RESOLVED + path.sep)) {
+    return null;
+  }
+  return candidate;
+}
+
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+// -------------------------------------------------------------
+// Global Security Hardening & High-Concurrency Layer (1M+ Users Ready)
+// -------------------------------------------------------------
+function getClientIp(req: express.Request): string {
+  const cfIp = req.headers['cf-connecting-ip'];
+  if (typeof cfIp === 'string' && cfIp.trim()) return cfIp.trim();
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.trim()) return realIp.trim();
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return (req.ip || req.socket?.remoteAddress || 'unknown').replace(/^::ffff:/, '');
+}
+
+function isPrivateOrLoopbackIp(ip: string): boolean {
+  const clean = String(ip || '').trim().toLowerCase().replace(/^::ffff:/, '');
+  if (!clean || clean === 'unknown' || clean === 'localhost' || clean === '127.0.0.1' || clean === '::1') {
+    return true;
+  }
+  if (/^(10\.|192\.168\.|127\.|169\.254\.|0\.)/.test(clean)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(clean)) return true;
+  if (clean.startsWith('fc') || clean.startsWith('fd') || clean.startsWith('fe80:')) return true;
+  return false;
+}
+
+function createRateLimiter(options: {
+  windowMs: number;
+  max: number;
+  label: string;
+  keyFn?: (req: express.Request) => string;
+}): express.RequestHandler {
+  const hits = new Map<string, { count: number; resetAt: number }>();
+  const MAX_TRACKED_KEYS = 50_000;
+
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = options.keyFn ? options.keyFn(req) : getClientIp(req);
+    let entry = hits.get(key);
+
+    if (!entry || entry.resetAt <= now) {
+      if (hits.size >= MAX_TRACKED_KEYS) {
+        for (const [k, v] of hits) {
+          if (v.resetAt <= now) hits.delete(k);
+          if (hits.size < MAX_TRACKED_KEYS * 0.85) break;
+        }
+        if (hits.size >= MAX_TRACKED_KEYS) {
+          const oldestKey = hits.keys().next().value;
+          if (oldestKey) hits.delete(oldestKey);
+        }
+      }
+      entry = { count: 1, resetAt: now + options.windowMs };
+      hits.set(key, entry);
+      return next();
+    }
+
+    entry.count += 1;
+    if (entry.count > options.max) {
+      const retrySec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retrySec));
+      return res.status(429).json({
+        success: false,
+        error: `Too many ${options.label} requests. Please retry in ${retrySec}s.`,
+      });
+    }
+    return next();
+  };
+}
+
+const globalApiLimiter = createRateLimiter({ windowMs: 60_000, max: 300, label: 'API' });
+const authLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 20, label: 'authentication' });
+const resetPasswordLimiter = createRateLimiter({
+  windowMs: 15 * 60_000,
+  max: 6,
+  label: 'password reset',
+  keyFn: (req) => `${getClientIp(req)}:${String(req.body?.email || '').trim().toLowerCase()}`,
+});
+const paystackLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 15, label: 'checkout' });
+const uploadLimiter = createRateLimiter({ windowMs: 10 * 60_000, max: 40, label: 'media upload' });
+
+// Security headers across every route
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), payment=(self)');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+// Zero-dependency Gzip compression for JSON/XML/text responses >= 1KB
+app.use((req, res, next) => {
+  const acceptEnc = String(req.headers['accept-encoding'] || '');
+  if (!acceptEnc.includes('gzip') || req.path.startsWith('/uploads/') || req.path.includes('/stream')) {
+    return next();
+  }
+
+  const origJson = res.json.bind(res);
+  res.json = ((body: any) => {
+    try {
+      const jsonStr = JSON.stringify(body);
+      if (jsonStr && jsonStr.length >= 1024 && !res.headersSent) {
+        const compressed = zlib.gzipSync(Buffer.from(jsonStr, 'utf-8'));
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Vary', 'Accept-Encoding');
+        return res.send(compressed);
+      }
+    } catch {}
+    return origJson(body);
+  }) as any;
+  next();
+});
+
+app.use('/api', globalApiLimiter);
+
 app.use('/uploads', express.static(UPLOADS_DIR, { acceptRanges: true, maxAge: '7d' }));
 app.use(
   express.json({
@@ -68,6 +242,37 @@ app.use(
   })
 );
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Prototype-pollution & null-byte sanitizer on JSON/query inputs
+const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+function sanitizeInputTree(val: any, depth = 0): any {
+  if (depth > 8 || val === null || val === undefined) return val;
+  if (typeof val === 'string') return val.replace(/\0/g, '');
+  if (Array.isArray(val)) return val.map((item) => sanitizeInputTree(item, depth + 1));
+  if (typeof val === 'object' && !Buffer.isBuffer(val)) {
+    const clean: Record<string, any> = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (BLOCKED_KEYS.has(k)) continue;
+      clean[k] = sanitizeInputTree(v, depth + 1);
+    }
+    return clean;
+  }
+  return val;
+}
+
+app.use((req, _res, next) => {
+  if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+    req.body = sanitizeInputTree(req.body);
+  }
+  if (req.query && typeof req.query === 'object') {
+    for (const key of Object.keys(req.query)) {
+      if (BLOCKED_KEYS.has(key)) {
+        delete req.query[key];
+      }
+    }
+  }
+  next();
+});
 
 // Initialize Backend Supabase Client using environment secrets
 const supabaseUrl =
@@ -161,24 +366,59 @@ async function invokeGeminiSafely(
 }
 
 // -------------------------------------------------------------
-// Authentication Routes (Supabase Auth)
+// Authentication Routes (Supabase Auth + Salted Scrypt Hybrid + Reset Password)
 // -------------------------------------------------------------
-app.post('/api/auth/signup', async (req, res) => {
+const inMemoryAuthCredentials: Record<string, string> = {};
+const passwordResetTokens = new Map<string, { codeHash: string; expiresAt: number; attempts: number }>();
+
+function hashPasswordScrypt(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyPasswordScrypt(password: string, stored: string): boolean {
+  const parts = String(stored || '').split(':');
+  if (parts.length !== 2) return false;
+  const [salt, hexHash] = parts;
+  if (!salt || !hexHash) return false;
+  try {
+    const derived = crypto.scryptSync(String(password), salt, 64);
+    const expected = Buffer.from(hexHash, 'hex');
+    if (derived.length !== expected.length) return false;
+    return crypto.timingSafeEqual(derived, expected);
+  } catch {
+    return false;
+  }
+}
+
+app.post('/api/auth/signup', authLimiter, async (req, res) => {
   const { email, password, name, handle, favoriteClub, favoriteCountry } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
-  if (password.length < 6) {
+  if (String(password).length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
-  const baseHandle = handle
-    ? (String(handle).startsWith('@') ? String(handle) : `@${handle}`)
+  const isCreatorAccount = isCreatorEmail(normalizedEmail);
+  const baseHandle = isCreatorAccount
+    ? CREATOR_HANDLE
+    : handle
+    ? (String(handle).trim().startsWith('@') ? String(handle).trim() : `@${String(handle).trim()}`)
     : `@${normalizedEmail.split('@')[0]}`;
-  const displayName = name || normalizedEmail.split('@')[0];
+  const displayName = isCreatorAccount
+    ? (String(name || '').trim() || CREATOR_NAME)
+    : (String(name || '').trim() || normalizedEmail.split('@')[0]);
+
+  if (!isCreatorAccount && (isReservedFutfieldText(displayName) || isReservedFutfieldText(baseHandle))) {
+    return res.status(400).json({
+      error: 'The name "Futfield" is strictly reserved for the official Futfield Creator account.',
+    });
+  }
 
   // If Supabase is connected, execute real Auth SignUp
   if (supabaseBackendClient) {
@@ -244,13 +484,15 @@ app.post('/api/auth/signup', async (req, res) => {
         name: displayName,
         handle: baseHandle,
         avatar: DEFAULT_AVATAR,
-        bio: `${favoriteClub || 'Football'} supporter on FUTFIELD ⚽`,
+        bio: isCreatorAccount
+          ? 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽'
+          : `${favoriteClub || 'Football'} supporter on FUTFIELD ⚽`,
         favoriteClub: favoriteClub || 'Not Set',
         favoriteClubCrest: '⚽',
         favoriteCountry: favoriteCountry || 'Global',
         favoriteCountryFlag: '🌍',
         favoritePlayers: [],
-        fanPoints: 0,
+        fanPoints: isCreatorAccount ? 1000 : 0,
         weeklyPoints: 0,
         followersCount: 0,
         followingCount: 0,
@@ -258,20 +500,33 @@ app.post('/api/auth/signup', async (req, res) => {
         predictionAccuracy: 0,
         correctPredictions: 0,
         totalPredictions: 0,
+        isOfficialCreator: isCreatorAccount,
         badges: [
           {
             id: 'b_welcome',
-            name: 'Verified Fan',
-            icon: '⭐',
-            description: 'Verified FUTFIELD registered member',
+            name: isCreatorAccount ? 'Official Creator' : 'Verified Fan',
+            icon: isCreatorAccount ? '👑' : '⭐',
+            description: isCreatorAccount ? 'Official Futfield Main Account' : 'Verified FUTFIELD registered member',
             color: 'from-emerald-500/20 to-emerald-700/20 text-emerald-400 border-emerald-500/30',
           },
         ],
         isAuthenticated: true,
       };
 
+      inMemoryAuthCredentials[normalizedEmail] = hashPasswordScrypt(password);
       inMemoryProfiles[userId] = profile;
       inMemoryProfiles[profile.handle] = profile;
+      if (isCreatorAccount) {
+        inMemoryProfiles[CREATOR_ID] = profile;
+        inMemoryProfiles[CREATOR_EMAIL] = profile;
+      } else {
+        await ensureAutoFollowCreator(userId);
+        profile.followingCount = inMemoryFollows.filter(f => f.followerId === userId).length;
+      }
+      if (isCreatorAccount) {
+        profile.followersCount = countCreatorFollowers();
+      }
+      scheduleStorePersist();
 
       // Upsert profile using exact supabase_schema.sql columns
       if (isValidUuid(userId)) {
@@ -308,6 +563,7 @@ app.post('/api/auth/signup', async (req, res) => {
         user: authUser || { id: userId, email: normalizedEmail },
         session: authSession,
         profile,
+        autoFollowedCreator: !isCreatorAccount,
       });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || 'Authentication error occurred.' });
@@ -315,20 +571,22 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 
   // Fallback session if Supabase keys are not set in environment
-  const fallbackId = `user_${Date.now()}`;
+  const fallbackId = isCreatorAccount ? CREATOR_ID : `user_${Date.now()}`;
   const profile = {
     id: fallbackId,
     email: normalizedEmail,
     name: displayName,
     handle: baseHandle,
     avatar: DEFAULT_AVATAR,
-    bio: `${favoriteClub || 'Football'} supporter on FUTFIELD ⚽`,
+    bio: isCreatorAccount
+      ? 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽'
+      : `${favoriteClub || 'Football'} supporter on FUTFIELD ⚽`,
     favoriteClub: favoriteClub || 'Not Set',
     favoriteClubCrest: '⚽',
     favoriteCountry: favoriteCountry || 'Global',
     favoriteCountryFlag: '🌍',
     favoritePlayers: [],
-    fanPoints: 0,
+    fanPoints: isCreatorAccount ? 1000 : 0,
     weeklyPoints: 0,
     followersCount: 0,
     followingCount: 0,
@@ -336,30 +594,42 @@ app.post('/api/auth/signup', async (req, res) => {
     predictionAccuracy: 0,
     correctPredictions: 0,
     totalPredictions: 0,
+    isOfficialCreator: isCreatorAccount,
     badges: [
       {
         id: 'b_welcome',
-        name: 'Verified Fan',
-        icon: '⭐',
-        description: 'Verified FUTFIELD registered member',
+        name: isCreatorAccount ? 'Official Creator' : 'Verified Fan',
+        icon: isCreatorAccount ? '👑' : '⭐',
+        description: isCreatorAccount ? 'Official Futfield Main Account' : 'Verified FUTFIELD registered member',
         color: 'from-emerald-500/20 to-emerald-700/20 text-emerald-400 border-emerald-500/30',
       },
     ],
     isAuthenticated: true,
   };
 
+  inMemoryAuthCredentials[normalizedEmail] = hashPasswordScrypt(password);
   inMemoryProfiles[fallbackId] = profile;
   inMemoryProfiles[profile.handle] = profile;
+  if (isCreatorAccount) {
+    inMemoryProfiles[CREATOR_ID] = profile;
+    inMemoryProfiles[CREATOR_EMAIL] = profile;
+    profile.followersCount = countCreatorFollowers();
+  } else {
+    await ensureAutoFollowCreator(fallbackId);
+    profile.followingCount = inMemoryFollows.filter(f => f.followerId === fallbackId).length;
+  }
+  scheduleStorePersist();
 
   return res.json({
     success: true,
     user: { id: profile.id, email: profile.email },
     profile,
+    autoFollowedCreator: !isCreatorAccount,
     notice: 'Authenticated successfully.',
   });
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -367,6 +637,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
+  const isCreatorAccount = isCreatorEmail(normalizedEmail);
 
   if (supabaseBackendClient) {
     try {
@@ -447,8 +718,23 @@ app.post('/api/auth/login', async (req, res) => {
         isAuthenticated: true,
       };
 
+      if (isCreatorAccount) {
+        finalProfile.name = finalProfile.name || CREATOR_NAME;
+        finalProfile.handle = CREATOR_HANDLE;
+        finalProfile.isOfficialCreator = true;
+        inMemoryProfiles[CREATOR_ID] = finalProfile;
+        inMemoryProfiles[CREATOR_EMAIL] = finalProfile;
+        finalProfile.followersCount = countCreatorFollowers();
+      } else {
+        if (isReservedFutfieldText(finalProfile.name)) finalProfile.name = normalizedEmail.split('@')[0] || 'Football Fan';
+        if (isReservedFutfieldText(finalProfile.handle)) finalProfile.handle = `@${normalizedEmail.split('@')[0] || 'fan'}`;
+        await ensureAutoFollowCreator(finalProfile.id);
+        finalProfile.followingCount = inMemoryFollows.filter(f => f.followerId === finalProfile.id).length;
+      }
+
       inMemoryProfiles[data.user.id] = finalProfile;
       if (finalProfile.handle) inMemoryProfiles[finalProfile.handle] = finalProfile;
+      scheduleStorePersist();
 
       return res.json({
         success: true,
@@ -461,21 +747,33 @@ app.post('/api/auth/login', async (req, res) => {
     }
   }
 
-  // Offline / local auth
+  // Offline / local hybrid auth with scrypt password verification
+  const storedHash = inMemoryAuthCredentials[normalizedEmail];
+  if (storedHash && !verifyPasswordScrypt(password, storedHash)) {
+    return res.status(401).json({ error: 'Invalid email or password.' });
+  }
+
   const existingMem = Object.values(inMemoryProfiles).find((p: any) => p.email === normalizedEmail);
+  if (!storedHash && existingMem) {
+    inMemoryAuthCredentials[normalizedEmail] = hashPasswordScrypt(password);
+  } else if (!storedHash) {
+    inMemoryAuthCredentials[normalizedEmail] = hashPasswordScrypt(password);
+  }
   const profile = existingMem || {
-    id: `user_${Date.now()}`,
+    id: isCreatorAccount ? CREATOR_ID : `user_${Date.now()}`,
     email: normalizedEmail,
-    name: normalizedEmail.split('@')[0],
-    handle: `@${normalizedEmail.split('@')[0]}`,
+    name: isCreatorAccount ? CREATOR_NAME : normalizedEmail.split('@')[0],
+    handle: isCreatorAccount ? CREATOR_HANDLE : `@${normalizedEmail.split('@')[0]}`,
     avatar: DEFAULT_AVATAR,
-    bio: 'Football fan on FUTFIELD ⚽',
+    bio: isCreatorAccount
+      ? 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽'
+      : 'Football fan on FUTFIELD ⚽',
     favoriteClub: 'Not Set',
     favoriteClubCrest: '⚽',
     favoriteCountry: 'Global',
     favoriteCountryFlag: '🌍',
     favoritePlayers: [],
-    fanPoints: 0,
+    fanPoints: isCreatorAccount ? 1000 : 0,
     weeklyPoints: 0,
     followersCount: 0,
     followingCount: 0,
@@ -483,12 +781,27 @@ app.post('/api/auth/login', async (req, res) => {
     predictionAccuracy: 0,
     correctPredictions: 0,
     totalPredictions: 0,
+    isOfficialCreator: isCreatorAccount,
     badges: [],
     isAuthenticated: true,
   };
 
+  if (isCreatorAccount) {
+    profile.handle = CREATOR_HANDLE;
+    profile.isOfficialCreator = true;
+    inMemoryProfiles[CREATOR_ID] = profile;
+    inMemoryProfiles[CREATOR_EMAIL] = profile;
+    profile.followersCount = countCreatorFollowers();
+  } else {
+    if (isReservedFutfieldText(profile.name)) profile.name = normalizedEmail.split('@')[0] || 'Football Fan';
+    if (isReservedFutfieldText(profile.handle)) profile.handle = `@${normalizedEmail.split('@')[0] || 'fan'}`;
+    await ensureAutoFollowCreator(profile.id);
+    profile.followingCount = inMemoryFollows.filter(f => f.followerId === profile.id).length;
+  }
+
   inMemoryProfiles[profile.id] = profile;
   inMemoryProfiles[profile.handle] = profile;
+  scheduleStorePersist();
 
   return res.json({
     success: true,
@@ -506,7 +819,125 @@ app.post('/api/auth/logout', async (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/auth/update-password', async (req, res) => {
+app.post('/api/auth/forgot-password', resetPasswordLimiter, async (req, res) => {
+  const normalizedEmail = String(req.body?.email || '').trim().toLowerCase();
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Please enter a valid account email address.',
+    });
+  }
+
+  const code = String(crypto.randomInt(100000, 999999));
+  const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+
+  if (passwordResetTokens.size >= 20_000) {
+    const oldestKey = passwordResetTokens.keys().next().value;
+    if (oldestKey) passwordResetTokens.delete(oldestKey);
+  }
+  passwordResetTokens.set(normalizedEmail, {
+    codeHash,
+    expiresAt: Date.now() + 15 * 60_000,
+    attempts: 0,
+  });
+
+  let supabaseEmailSent = false;
+  if (supabaseBackendClient) {
+    try {
+      const origin = String(req.headers.origin || 'https://futfieldsports.com.ng').replace(/\/$/, '');
+      const { error } = await supabaseBackendClient.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo: `${origin}/auth/reset-password`,
+      });
+      if (!error) supabaseEmailSent = true;
+    } catch {}
+  }
+
+  return res.json({
+    success: true,
+    email: normalizedEmail,
+    expiresInMinutes: 15,
+    supabaseEmailSent,
+    verificationCode: !process.env.SMTP_HOST ? code : undefined,
+    message: supabaseEmailSent
+      ? `Password reset link sent to ${normalizedEmail}. You can also enter your 6-digit verification code below.`
+      : `6-digit password reset code generated for ${normalizedEmail} (valid 15 minutes).`,
+  });
+});
+
+app.post('/api/auth/reset-password', resetPasswordLimiter, async (req, res) => {
+  const normalizedEmail = String(req.body?.email || '').trim().toLowerCase();
+  const code = String(req.body?.code || '').trim();
+  const newPassword = String(req.body?.newPassword || '');
+
+  if (!normalizedEmail || !code || !newPassword) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email, 6-digit verification code, and new password are required.',
+    });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({
+      success: false,
+      error: 'New password must be at least 6 characters long.',
+    });
+  }
+
+  const tokenRecord = passwordResetTokens.get(normalizedEmail);
+  if (!tokenRecord || Date.now() > tokenRecord.expiresAt) {
+    passwordResetTokens.delete(normalizedEmail);
+    return res.status(400).json({
+      success: false,
+      error: 'Reset code has expired or was not requested. Request a new code.',
+    });
+  }
+
+  if (tokenRecord.attempts >= 5) {
+    passwordResetTokens.delete(normalizedEmail);
+    return res.status(429).json({
+      success: false,
+      error: 'Maximum verification attempts exceeded. Please request a new reset code.',
+    });
+  }
+
+  const candidateHash = crypto.createHash('sha256').update(code).digest('hex');
+  const a = Buffer.from(candidateHash, 'hex');
+  const b = Buffer.from(tokenRecord.codeHash, 'hex');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    tokenRecord.attempts += 1;
+    return res.status(400).json({
+      success: false,
+      error: `Invalid verification code. ${Math.max(0, 5 - tokenRecord.attempts)} attempts left.`,
+    });
+  }
+
+  passwordResetTokens.delete(normalizedEmail);
+  inMemoryAuthCredentials[normalizedEmail] = hashPasswordScrypt(newPassword);
+  scheduleStorePersist();
+
+  const matchingProf = Object.values(inMemoryProfiles).find(
+    (p: any) => String(p?.email || '').toLowerCase() === normalizedEmail
+  );
+
+  if (supabaseBackendClient && hasServiceRole && isValidUuid(matchingProf?.id)) {
+    try {
+      await supabaseBackendClient.auth.admin?.updateUserById(matchingProf.id, {
+        password: newPassword,
+      });
+    } catch (err: any) {
+      console.warn('[Backend] Supabase admin password reset notice:', err?.message);
+    }
+  }
+
+  return res.json({
+    success: true,
+    email: normalizedEmail,
+    updatedAt: new Date().toISOString(),
+    message: `Password reset successfully for ${normalizedEmail}. Sign in with your new password.`,
+  });
+});
+
+app.post('/api/auth/update-password', authLimiter, async (req, res) => {
   const { email, userId, newPassword } = req.body || {};
 
   if (!newPassword || String(newPassword).length < 6) {
@@ -523,6 +954,9 @@ app.post('/api/auth/update-password', async (req, res) => {
       error: 'Please sign in with an account email before updating your password.',
     });
   }
+
+  inMemoryAuthCredentials[targetEmail] = hashPasswordScrypt(String(newPassword));
+  scheduleStorePersist();
 
   if (supabaseBackendClient) {
     try {
@@ -589,27 +1023,49 @@ app.post('/api/db/sync-profile', async (req, res) => {
   }
 
   const targetId = String(profile.id || profile.handle);
-  inMemoryProfiles[targetId] = {
-    ...(inMemoryProfiles[targetId] || {}),
-    ...profile,
-  };
-  if (profile.handle) {
-    inMemoryProfiles[profile.handle] = inMemoryProfiles[targetId];
+  const existing = inMemoryProfiles[targetId];
+  const email = profile.email || existing?.email || '';
+  const isCreatorAccount = isCreatorEmail(email);
+
+  if (!isCreatorAccount && (isReservedFutfieldText(profile.name) || isReservedFutfieldText(profile.handle))) {
+    return res.status(400).json({
+      success: false,
+      error: 'The name "Futfield" is strictly reserved for the official Futfield Creator account.',
+    });
   }
+
+  const cleanProfile = {
+    ...(existing || {}),
+    ...profile,
+    handle: isCreatorAccount ? CREATOR_HANDLE : profile.handle,
+    isOfficialCreator: isCreatorAccount,
+  };
+
+  inMemoryProfiles[targetId] = cleanProfile;
+  if (cleanProfile.handle) {
+    inMemoryProfiles[cleanProfile.handle] = cleanProfile;
+  }
+  if (isCreatorAccount) {
+    inMemoryProfiles[CREATOR_ID] = cleanProfile;
+    inMemoryProfiles[CREATOR_EMAIL] = cleanProfile;
+  } else if (profile.isAuthenticated && targetId !== 'guest_user') {
+    await ensureAutoFollowCreator(targetId);
+  }
+  scheduleStorePersist();
 
   if (supabaseBackendClient && isValidUuid(targetId)) {
     try {
       await supabaseBackendClient.from('profiles').upsert({
         id: targetId,
-        username: profile.handle || `@fan_${targetId.slice(0, 6)}`,
-        full_name: profile.name || 'Football Fan',
-        avatar_url: profile.avatar || DEFAULT_AVATAR,
-        bio: profile.bio || '',
-        favorite_club: profile.favoriteClub || 'Not Set',
-        favorite_club_logo: profile.favoriteClubCrest || '⚽',
-        fan_points: Number(profile.fanPoints || 0),
-        location: profile.location || null,
-        website: profile.website || null,
+        username: cleanProfile.handle || `@fan_${targetId.slice(0, 6)}`,
+        full_name: cleanProfile.name || 'Football Fan',
+        avatar_url: cleanProfile.avatar || DEFAULT_AVATAR,
+        bio: cleanProfile.bio || '',
+        favorite_club: cleanProfile.favoriteClub || 'Not Set',
+        favorite_club_logo: cleanProfile.favoriteClubCrest || '⚽',
+        fan_points: Number(cleanProfile.fanPoints || 0),
+        location: cleanProfile.location || null,
+        website: cleanProfile.website || null,
       });
     } catch (err: any) {
       console.warn('[Backend] sync-profile Supabase notice:', err?.message);
@@ -685,6 +1141,110 @@ const inMemoryFutubeReports: Array<{ videoId: string; userId: string; reason: st
 const inMemoryFutubeDailyUploads: Record<string, string[]> = {};
 const inMemoryFollows: { followerId: string; followingId: string }[] = [];
 const inMemoryProfiles: Record<string, any> = {};
+const inMemoryPredictorPicks: any[] = [];
+const inMemoryArenaPolls: Array<{
+  id: string;
+  question: string;
+  category: string;
+  authorName: string;
+  options: Array<{ id: string; label: string; votes: number }>;
+  voters: Record<string, string>;
+  createdAt: string;
+}> = [
+  {
+    id: 'poll_1',
+    question: 'Who wins the UEFA Champions League this season?',
+    category: 'UEFA Champions League',
+    authorName: 'Futfield',
+    options: [
+      { id: 'opt_1', label: 'Real Madrid', votes: 14 },
+      { id: 'opt_2', label: 'Arsenal', votes: 11 },
+      { id: 'opt_3', label: 'FC Barcelona / Bayern', votes: 9 },
+    ],
+    voters: {},
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'poll_2',
+    question: 'Who is the Premier League Player of the Season so far?',
+    category: 'Premier League',
+    authorName: 'Futfield',
+    options: [
+      { id: 'opt_1', label: 'Mohamed Salah', votes: 18 },
+      { id: 'opt_2', label: 'Bukayo Saka', votes: 12 },
+      { id: 'opt_3', label: 'Cole Palmer', votes: 10 },
+    ],
+    voters: {},
+    createdAt: new Date().toISOString(),
+  },
+];
+
+function seedOfficialCreatorProfile() {
+  if (!inMemoryProfiles[CREATOR_ID]) {
+    const creatorProf = {
+      id: CREATOR_ID,
+      email: CREATOR_EMAIL,
+      name: CREATOR_NAME,
+      handle: CREATOR_HANDLE,
+      avatar: DEFAULT_AVATAR,
+      bio: 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽',
+      favoriteClub: 'FUTFIELD Official',
+      favoriteClubCrest: '⚽',
+      favoriteCountry: 'Global',
+      favoriteCountryFlag: '🌍',
+      fanPoints: 1000,
+      followersCount: 0,
+      followingCount: 0,
+      isOfficialCreator: true,
+      joinedAt: 'Official Main Account',
+    };
+    inMemoryProfiles[CREATOR_ID] = creatorProf;
+    inMemoryProfiles[CREATOR_HANDLE] = creatorProf;
+    inMemoryProfiles[CREATOR_EMAIL] = creatorProf;
+  }
+}
+seedOfficialCreatorProfile();
+
+function countCreatorFollowers(): number {
+  const uniqueFollowers = new Set<string>();
+  for (const f of inMemoryFollows) {
+    if (isCreatorTarget(f.followingId)) {
+      uniqueFollowers.add(f.followerId);
+    }
+  }
+  return uniqueFollowers.size;
+}
+
+async function ensureAutoFollowCreator(followerId: string) {
+  if (!followerId || followerId === 'guest_user' || isCreatorTarget(followerId)) return;
+  const alreadyFollowing = inMemoryFollows.some(
+    f => f.followerId === followerId && isCreatorTarget(f.followingId)
+  );
+  if (!alreadyFollowing) {
+    inMemoryFollows.push({ followerId, followingId: CREATOR_ID });
+    if (supabaseBackendClient && isValidUuid(followerId)) {
+      try {
+        await supabaseBackendClient.from('follows').insert({ follower_id: followerId, following_id: CREATOR_ID });
+      } catch {}
+    }
+  }
+  const alreadyConnected = inMemoryFutubeConnects.some(
+    c => c.fanId === followerId && c.fanzoneId === CREATOR_HANDLE
+  );
+  if (!alreadyConnected) {
+    inMemoryFutubeConnects.push({
+      fanId: followerId,
+      fanzoneId: CREATOR_HANDLE,
+      alertEnabled: true,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  const creatorProf = inMemoryProfiles[CREATOR_ID];
+  if (creatorProf) {
+    creatorProf.followersCount = countCreatorFollowers();
+  }
+}
+
 const inMemoryCommunities: any[] = [];
 const inMemoryCommunityMembers: { communityId: string; userId: string }[] = [];
 const inMemoryMatchRooms: Record<string, any[]> = {};
@@ -809,6 +1369,22 @@ try {
     if (rawFeed?.activeSubscriptions && typeof rawFeed.activeSubscriptions === 'object') {
       Object.assign(activeSubscriptionsStore, rawFeed.activeSubscriptions);
     }
+    if (Array.isArray(rawFeed?.follows)) {
+      inMemoryFollows.push(...rawFeed.follows);
+    }
+    if (rawFeed?.authCredentials && typeof rawFeed.authCredentials === 'object') {
+      Object.assign(inMemoryAuthCredentials, rawFeed.authCredentials);
+    }
+    if (rawFeed?.profiles && typeof rawFeed.profiles === 'object') {
+      Object.assign(inMemoryProfiles, rawFeed.profiles);
+      seedOfficialCreatorProfile();
+    }
+    if (Array.isArray(rawFeed?.predictorPicks)) {
+      inMemoryPredictorPicks.push(...rawFeed.predictorPicks);
+    }
+    if (Array.isArray(rawFeed?.arenaPolls) && rawFeed.arenaPolls.length > 0) {
+      inMemoryArenaPolls.splice(0, inMemoryArenaPolls.length, ...rawFeed.arenaPolls);
+    }
   }
   if (fs.existsSync(SUPPORT_TICKETS_FILE)) {
     const rawTickets = JSON.parse(fs.readFileSync(SUPPORT_TICKETS_FILE, 'utf-8'));
@@ -820,40 +1396,66 @@ try {
   console.warn('[Backend] Store hydration notice:', err);
 }
 
+async function writeJsonAtomic(filePath: string, payload: unknown) {
+  const tmpPath = `${filePath}.tmp`;
+  await fs.promises.writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+  await fs.promises.rename(tmpPath, filePath);
+}
+
 let persistTimer: NodeJS.Timeout | null = null;
+let persistInFlight = false;
+let persistQueued = false;
+
+async function flushStorePersist() {
+  if (persistInFlight) {
+    persistQueued = true;
+    return;
+  }
+  persistInFlight = true;
+  try {
+    await Promise.all([
+      writeJsonAtomic(MEDIA_REGISTRY_FILE, mediaRegistry.slice(0, 500)),
+      writeJsonAtomic(FEED_STORE_FILE, {
+        posts: inMemoryPosts.slice(0, 200),
+        videos: inMemoryVideos.slice(0, 200),
+        postComments: inMemoryPostComments.slice(0, 500),
+        videoComments: inMemoryVideoComments.slice(0, 500),
+        futubeConnects: inMemoryFutubeConnects.slice(0, 1000),
+        futubeCheers: inMemoryFutubeCheers.slice(0, 2000),
+        futubeBoos: inMemoryFutubeBoos.slice(0, 1000),
+        futubeShouts: inMemoryFutubeShouts.slice(0, 1000),
+        futubeWatchHistory: inMemoryFutubeWatchHistory.slice(0, 3000),
+        futubePacks: inMemoryFutubePacks.slice(0, 500),
+        futubeBattles: inMemoryFutubeBattles.slice(0, 100),
+        futubeLiveChats: inMemoryFutubeLiveChats,
+        futubeDailyUploads: inMemoryFutubeDailyUploads,
+        paystackTransactions,
+        activeSubscriptions: activeSubscriptionsStore,
+        follows: inMemoryFollows.slice(0, 5000),
+        authCredentials: inMemoryAuthCredentials,
+        profiles: inMemoryProfiles,
+        predictorPicks: inMemoryPredictorPicks.slice(0, 2000),
+        arenaPolls: inMemoryArenaPolls.slice(0, 100),
+      }),
+      writeJsonAtomic(SUPPORT_TICKETS_FILE, inMemorySupportTickets.slice(0, 300)),
+    ]);
+  } catch (err) {
+    console.warn('[Backend] Store persist notice:', err);
+  } finally {
+    persistInFlight = false;
+    if (persistQueued) {
+      persistQueued = false;
+      setImmediate(() => {
+        flushStorePersist().catch(() => {});
+      });
+    }
+  }
+}
+
 function scheduleStorePersist() {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    try {
-      fs.writeFileSync(MEDIA_REGISTRY_FILE, JSON.stringify(mediaRegistry.slice(0, 500), null, 2));
-      fs.writeFileSync(
-        FEED_STORE_FILE,
-        JSON.stringify(
-          {
-            posts: inMemoryPosts.slice(0, 200),
-            videos: inMemoryVideos.slice(0, 200),
-            postComments: inMemoryPostComments.slice(0, 500),
-            videoComments: inMemoryVideoComments.slice(0, 500),
-            futubeConnects: inMemoryFutubeConnects.slice(0, 1000),
-            futubeCheers: inMemoryFutubeCheers.slice(0, 2000),
-            futubeBoos: inMemoryFutubeBoos.slice(0, 1000),
-            futubeShouts: inMemoryFutubeShouts.slice(0, 1000),
-            futubeWatchHistory: inMemoryFutubeWatchHistory.slice(0, 3000),
-            futubePacks: inMemoryFutubePacks.slice(0, 500),
-            futubeBattles: inMemoryFutubeBattles.slice(0, 100),
-            futubeLiveChats: inMemoryFutubeLiveChats,
-            futubeDailyUploads: inMemoryFutubeDailyUploads,
-            paystackTransactions,
-            activeSubscriptions: activeSubscriptionsStore,
-          },
-          null,
-          2
-        )
-      );
-      fs.writeFileSync(SUPPORT_TICKETS_FILE, JSON.stringify(inMemorySupportTickets.slice(0, 300), null, 2));
-    } catch (err) {
-      console.warn('[Backend] Store persist notice:', err);
-    }
+    flushStorePersist().catch(() => {});
   }, 250);
 }
 
@@ -1482,11 +2084,11 @@ app.get('/api/db/videos', async (req, res) => {
               commentsCount: v.comments_count || 0,
               shares: 0,
               isSaved: false,
-              quality: '1080p · Pitch Sound ON',
+              quality: '1080p · Sound ON',
               copyrightStatus: 'CLEAR',
               tacticalSummary: v.description || '',
               category: 'foryou',
-              hashtags: ['#PitchReels', '#FUTFIELD'],
+              hashtags: ['#FutfieldTube', '#FUTFIELD'],
             });
           }
         }
@@ -1527,7 +2129,7 @@ app.post('/api/db/videos', async (req, res) => {
     return res.status(400).json({ error: 'Video must be uploaded to backend storage before publishing' });
   }
 
-  // Enforce 9:16 Shorts <= 120s and 16:9 Videos <= 180s
+  // Enforce 9:16 Quick Kicks <= 120s and 16:9 Clips <= 600s
   const durSec = Number(video.durationSeconds || 0);
   const resolvedAspectRatio: '9:16' | '16:9' =
     video.aspectRatio === '16:9' || video.videoKind === 'video' ? '16:9' : '9:16';
@@ -1536,22 +2138,21 @@ app.post('/api/db/videos', async (req, res) => {
   if (resolvedKind === 'short' && durSec > 120) {
     return res.status(400).json({
       success: false,
-      error: `9:16 PitchReels Shorts cannot exceed 2 minutes (120s). Received ${durSec}s.`,
+      error: `9:16 Quick Kicks cannot exceed 2 minutes (120s). Received ${durSec}s.`,
     });
   }
-  if (resolvedKind === 'video' && durSec > 180) {
+  if (resolvedKind === 'video' && durSec > 600) {
     return res.status(400).json({
       success: false,
-      error: `16:9 Football Videos cannot exceed 3 minutes (180s). Received ${durSec}s.`,
+      error: `16:9 Football Clips cannot exceed 10 minutes (600s). Received ${durSec}s.`,
     });
   }
 
-  // Run backend Copyright Detector (inspect local disk buffer if present + metadata)
+  // Run backend Copyright Detector with strict path-traversal containment
   let diskBuffer: Buffer | null = null;
   if (String(video.videoUrl).startsWith('/uploads/')) {
-    const safeRel = String(video.videoUrl).replace(/^\/uploads\//, '');
-    const candidatePath = path.join(UPLOADS_DIR, safeRel);
-    if (fs.existsSync(candidatePath)) {
+    const candidatePath = resolveSafeUploadPath(String(video.videoUrl));
+    if (candidatePath && fs.existsSync(candidatePath)) {
       try {
         diskBuffer = fs.readFileSync(candidatePath);
       } catch {}
@@ -2025,37 +2626,6 @@ function enrichFutubeVideo(raw: any, viewerId?: string) {
   };
 }
 
-function buildAutoCaptionsForVideo(video: any): Array<{ startSec: number; endSec: number; english: string; pidgin: string }> {
-  const title = String(video?.title || 'Matchday Moment').trim();
-  const club = String(video?.clubTag || 'the squad').trim();
-  const dur = Math.max(12, Math.min(180, Number(video?.durationSeconds || 36)));
-  const templates = [
-    {
-      english: `Watch ${club} build up fast right here — "${title}".`,
-      pidgin: `See as ${club} dey move ball sharp sharp — "${title}"!`,
-    },
-    {
-      english: `Look at that tight space control and quick switch on the flank!`,
-      pidgin: `Chai! Check how dem control am for corner, no waste time!`,
-    },
-    {
-      english: `Unbelievable vision — the FanZone crowd is going wild right now!`,
-      pidgin: `Omo! Dis pass sweet die, whole FanZone don scatter with cheer!`,
-    },
-    {
-      english: `Drop your Cheer 🔥 and Shout your match rating below!`,
-      pidgin: `Press Cheer 🔥 fast fast make you drop your Shout for comment!`,
-    },
-  ];
-  const seg = Math.max(3, Math.floor(dur / templates.length));
-  return templates.map((t, i) => ({
-    startSec: i * seg,
-    endSec: i === templates.length - 1 ? dur : (i + 1) * seg,
-    english: t.english,
-    pidgin: t.pidgin,
-  }));
-}
-
 app.get('/api/futube/videos', async (req, res) => {
   const category = String(req.query.category || 'All').trim();
   const search = String(req.query.search || '').trim().toLowerCase();
@@ -2283,8 +2853,16 @@ app.post('/api/futube/videos', async (req, res) => {
   }
 
   const newId = payload.id || `ft_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const uploaderProf = inMemoryProfiles[userId];
+  const isCreatorAccount = isCreatorEmail(payload.email || uploaderProf?.email);
   const fanzoneHandle = normalizeFutubeHandle(payload.fanzoneHandle || payload.creator?.handle || `@fan_${userId.slice(0, 6)}`);
   const fanzoneName = payload.fanzoneName || payload.creator?.name || 'FanZone Creator';
+  if (!isCreatorAccount && (isReservedFutfieldText(fanzoneName) || isReservedFutfieldText(fanzoneHandle))) {
+    return res.status(400).json({
+      success: false,
+      error: 'The name "Futfield" is strictly reserved for the official Futfield Creator account.',
+    });
+  }
   const fanzoneAvatar = payload.fanzoneAvatar || payload.creator?.avatar || DEFAULT_AVATAR;
   const tubeCategory = isQuickKick ? 'Quick Kicks' : String(payload.tubeCategory || payload.category || 'Goals');
   const boostFirst60 = tubeCategory.toLowerCase() === 'goals' || durSec <= 60;
@@ -2678,6 +3256,21 @@ app.post('/api/futube/connects/toggle', async (req, res) => {
   let isConnected = false;
   let alertEnabled = false;
   if (idx !== -1) {
+    if (isCreatorTarget(fanzoneId) && !isCreatorTarget(fanId)) {
+      const squadCount = Math.max(
+        1,
+        inMemoryFutubeConnects.filter(c => c.fanzoneId === fanzoneId).length
+      );
+      return res.json({
+        success: false,
+        blocked: true,
+        isConnected: true,
+        alertEnabled: inMemoryFutubeConnects[idx]?.alertEnabled ?? true,
+        squadCount,
+        fanzoneId,
+        error: 'You cannot disconnect from or unfollow the official Futfield Creator account.',
+      });
+    }
     inMemoryFutubeConnects.splice(idx, 1);
   } else {
     inMemoryFutubeConnects.push({
@@ -2782,7 +3375,7 @@ app.get('/api/futube/fanzone/:username', (req, res) => {
       avatar: prof?.avatar || firstVid?.fanzoneAvatar || DEFAULT_AVATAR,
       bannerUrl:
         firstVid?.fanzoneBanner ||
-        '/assets/aistudio/futfield_stadium_hero_banner.png',
+        '/og-image.jpg',
       bio:
         prof?.bio ||
         firstVid?.fanzoneBio ||
@@ -2841,13 +3434,6 @@ app.post('/api/futube/packs/save', async (req, res) => {
 
   scheduleStorePersist();
   return res.json({ success: true, pack });
-});
-
-app.get('/api/futube/captions/:videoId', (req, res) => {
-  const { videoId } = req.params;
-  const v = inMemoryVideos.find(item => item.id === videoId);
-  const cues = buildAutoCaptionsForVideo(v || { title: 'Matchday Highlight', durationSeconds: 30 });
-  return res.json({ success: true, videoId, cues });
 });
 
 app.get('/api/futube/battles', (req, res) => {
@@ -3069,11 +3655,16 @@ app.get('/api/db/profiles/:id', async (req, res) => {
   const likesReceived = userPosts.reduce((acc, p) => acc + (p.likes || 0), 0);
   const commentsReceived = userPosts.reduce((acc, p) => acc + (p.commentsCount || 0), 0);
 
-  const followers = inMemoryFollows.filter(f => f.followingId === id);
+  const targetIsCreator = isCreatorTarget(id);
+  const followers = targetIsCreator
+    ? inMemoryFollows.filter(f => isCreatorTarget(f.followingId))
+    : inMemoryFollows.filter(f => f.followingId === id);
   const followersCount = followers.length;
   const followingCount = inMemoryFollows.filter(f => f.followerId === id).length;
   const isFollowing = currentUserId
-    ? inMemoryFollows.some(f => f.followerId === currentUserId && f.followingId === id)
+    ? targetIsCreator
+      ? inMemoryFollows.some(f => f.followerId === currentUserId && isCreatorTarget(f.followingId))
+      : inMemoryFollows.some(f => f.followerId === currentUserId && f.followingId === id)
     : false;
 
   // Real fan points calculation: +10 per post, +20 per video, +2 per like received, +5 per comment received
@@ -3165,8 +3756,8 @@ app.get('/api/db/profiles/:id/points-history', async (req, res) => {
       icon: '📝',
     },
     {
-      category: 'PitchReels Uploads',
-      description: 'Original match highlights & football skill reels (+20 pts each)',
+      category: 'Futfield Tube Uploads',
+      description: 'Original match clips & Quick Kicks (+20 pts each)',
       count: videosCount,
       pointsPerUnit: 20,
       total: videosPoints,
@@ -3198,10 +3789,20 @@ app.get('/api/db/profiles/:id/points-history', async (req, res) => {
 
 app.put('/api/db/profiles/:id', async (req, res) => {
   const { id } = req.params;
-  const updates = req.body;
+  const updates = req.body || {};
+  const existing = inMemoryProfiles[id];
+  const email = updates.email || existing?.email || '';
+  const isCreatorAccount = isCreatorEmail(email) || isCreatorTarget(id);
+
+  if (!isCreatorAccount && (isReservedFutfieldText(updates.name) || isReservedFutfieldText(updates.handle))) {
+    return res.status(400).json({
+      success: false,
+      error: 'The name "Futfield" is strictly reserved for the official Futfield Creator account.',
+    });
+  }
 
   inMemoryProfiles[id] = {
-    ...(inMemoryProfiles[id] || {}),
+    ...(existing || {}),
     ...updates,
     id,
   };
@@ -3209,8 +3810,9 @@ app.put('/api/db/profiles/:id', async (req, res) => {
   if (updates.handle) {
     inMemoryProfiles[updates.handle] = inMemoryProfiles[id];
   }
+  scheduleStorePersist();
 
-  if (supabaseBackendClient) {
+  if (supabaseBackendClient && isValidUuid(id)) {
     try {
       await supabaseBackendClient.from('profiles').upsert({
         id,
@@ -3235,22 +3837,45 @@ app.post('/api/db/follows', async (req, res) => {
   const { followerId, followingId } = req.body;
   if (!followerId || !followingId) return res.status(400).json({ error: 'IDs required' });
 
+  const targetIsCreator = isCreatorTarget(followingId);
+  const idx = inMemoryFollows.findIndex(f =>
+    f.followerId === followerId &&
+    (targetIsCreator ? isCreatorTarget(f.followingId) : f.followingId === followingId)
+  );
+
   let following = false;
-  const idx = inMemoryFollows.findIndex(f => f.followerId === followerId && f.followingId === followingId);
   if (idx !== -1) {
+    if (targetIsCreator && !isCreatorTarget(followerId)) {
+      const followersCount = countCreatorFollowers();
+      return res.status(403).json({
+        success: false,
+        blocked: true,
+        following: true,
+        followersCount,
+        error: 'You cannot unfollow the official Futfield Creator account.',
+      });
+    }
     inMemoryFollows.splice(idx, 1);
     following = false;
   } else {
-    inMemoryFollows.push({ followerId, followingId });
+    inMemoryFollows.push({
+      followerId,
+      followingId: targetIsCreator ? CREATOR_ID : followingId,
+    });
     following = true;
   }
 
-  const followersCount = inMemoryFollows.filter(f => f.followingId === followingId).length;
+  const followersCount = targetIsCreator
+    ? countCreatorFollowers()
+    : inMemoryFollows.filter(f => f.followingId === followingId).length;
 
   if (supabaseBackendClient) {
     try {
       if (following) {
-        await supabaseBackendClient.from('follows').insert({ follower_id: followerId, following_id: followingId });
+        await supabaseBackendClient.from('follows').insert({
+          follower_id: followerId,
+          following_id: targetIsCreator ? CREATOR_ID : followingId,
+        });
       } else {
         await supabaseBackendClient.from('follows').delete().match({ follower_id: followerId, following_id: followingId });
       }
@@ -3259,16 +3884,22 @@ app.post('/api/db/follows', async (req, res) => {
     }
   }
 
+  scheduleStorePersist();
   return res.json({ success: true, following, followersCount });
 });
 
 app.get('/api/db/follows/:userId', (req, res) => {
   const { userId } = req.params;
-  const followerIds = inMemoryFollows.filter(f => f.followingId === userId).map(f => f.followerId);
+  const targetIsCreator = isCreatorTarget(userId);
+  const followerIds = (
+    targetIsCreator
+      ? inMemoryFollows.filter(f => isCreatorTarget(f.followingId))
+      : inMemoryFollows.filter(f => f.followingId === userId)
+  ).map(f => f.followerId);
   const followingIds = inMemoryFollows.filter(f => f.followerId === userId).map(f => f.followingId);
 
   const resolveUser = (uId: string) => {
-    const prof = inMemoryProfiles[uId];
+    const prof = inMemoryProfiles[uId] || (isCreatorTarget(uId) ? inMemoryProfiles[CREATOR_ID] : undefined);
     if (prof) {
       return {
         id: prof.id || uId,
@@ -3309,6 +3940,175 @@ app.get('/api/db/follows/:userId', (req, res) => {
     following: followingIds,
     followersUsers,
     followingUsers,
+  });
+});
+
+// -------------------------------------------------------------
+// Matchday Predictor League & Football IQ Arena Routes
+// -------------------------------------------------------------
+app.get('/api/predictor/predictions', (req, res) => {
+  const userId = String(req.query.userId || '');
+  const userPicks = userId ? inMemoryPredictorPicks.filter(p => p.userId === userId) : [];
+
+  const consensus: Record<string, { total: number; homePct: number; drawPct: number; awayPct: number }> = {};
+  const byMatch: Record<string, { home: number; draw: number; away: number; total: number }> = {};
+  for (const p of inMemoryPredictorPicks) {
+    if (!p?.matchId) continue;
+    if (!byMatch[p.matchId]) byMatch[p.matchId] = { home: 0, draw: 0, away: 0, total: 0 };
+    byMatch[p.matchId].total += 1;
+    if (p.outcome === 'home') byMatch[p.matchId].home += 1;
+    else if (p.outcome === 'away') byMatch[p.matchId].away += 1;
+    else byMatch[p.matchId].draw += 1;
+  }
+  for (const [mId, counts] of Object.entries(byMatch)) {
+    const t = Math.max(1, counts.total);
+    consensus[mId] = {
+      total: counts.total,
+      homePct: Math.round((counts.home / t) * 100),
+      drawPct: Math.round((counts.draw / t) * 100),
+      awayPct: Math.round((counts.away / t) * 100),
+    };
+  }
+
+  return res.json({ success: true, userPicks, consensus });
+});
+
+app.post('/api/predictor/predictions', (req, res) => {
+  const { userId = 'guest_user', userName = 'Football Fan', userHandle = '@fan', matchId, homeTeam, awayTeam, outcome, homeScore, awayScore, doubleConfidence } = req.body || {};
+  if (!matchId || !homeTeam || !awayTeam) {
+    return res.status(400).json({ success: false, error: 'Match details are required.' });
+  }
+  const cleanHandle = userHandle.startsWith('@') ? userHandle : `@${userHandle}`;
+  const idx = inMemoryPredictorPicks.findIndex(p => p.userId === userId && p.matchId === matchId);
+  const record = {
+    id: idx !== -1 ? inMemoryPredictorPicks[idx].id : `pred_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    userId,
+    userName,
+    userHandle: cleanHandle,
+    matchId,
+    homeTeam,
+    awayTeam,
+    outcome: outcome === 'home' || outcome === 'away' ? outcome : 'draw',
+    homeScore: Math.max(0, Math.min(9, Number(homeScore) || 0)),
+    awayScore: Math.max(0, Math.min(9, Number(awayScore) || 0)),
+    doubleConfidence: Boolean(doubleConfidence),
+    createdAt: new Date().toISOString(),
+  };
+  if (idx !== -1) {
+    inMemoryPredictorPicks[idx] = record;
+  } else {
+    inMemoryPredictorPicks.unshift(record);
+  }
+  const matchPicks = inMemoryPredictorPicks.filter(p => p.matchId === matchId);
+  const total = Math.max(1, matchPicks.length);
+  const consensus = {
+    total: matchPicks.length,
+    homePct: Math.round((matchPicks.filter(p => p.outcome === 'home').length / total) * 100),
+    drawPct: Math.round((matchPicks.filter(p => p.outcome === 'draw').length / total) * 100),
+    awayPct: Math.round((matchPicks.filter(p => p.outcome === 'away').length / total) * 100),
+  };
+  scheduleStorePersist();
+  return res.json({ success: true, prediction: record, consensus });
+});
+
+app.get('/api/predictor/leaderboard', (_req, res) => {
+  const grouped: Record<string, { userId: string; userName: string; userHandle: string; predictionsCount: number; pointsEarned: number; doubleLocks: number }> = {};
+  for (const p of inMemoryPredictorPicks) {
+    if (!grouped[p.userId]) {
+      grouped[p.userId] = {
+        userId: p.userId,
+        userName: p.userName || 'Football Fan',
+        userHandle: p.userHandle || '@fan',
+        predictionsCount: 0,
+        pointsEarned: 0,
+        doubleLocks: 0,
+      };
+    }
+    grouped[p.userId].predictionsCount += 1;
+    grouped[p.userId].pointsEarned += p.doubleConfidence ? 25 : 15;
+    if (p.doubleConfidence) grouped[p.userId].doubleLocks += 1;
+  }
+  const leaderboard = Object.values(grouped)
+    .sort((a, b) => b.pointsEarned - a.pointsEarned)
+    .slice(0, 25);
+  return res.json({ success: true, leaderboard });
+});
+
+app.get('/api/arena/polls', (req, res) => {
+  const userId = String(req.query.userId || '');
+  const formatted = inMemoryArenaPolls.map(poll => ({
+    id: poll.id,
+    question: poll.question,
+    category: poll.category,
+    authorName: poll.authorName,
+    options: poll.options,
+    totalVotes: poll.options.reduce((acc, o) => acc + Number(o.votes || 0), 0),
+    userVotedOptionId: userId ? poll.voters?.[userId] || null : null,
+  }));
+  return res.json({ success: true, polls: formatted });
+});
+
+app.post('/api/arena/polls', (req, res) => {
+  const { userId = 'guest_user', authorName = 'Football Fan', question, options } = req.body || {};
+  const cleanQ = String(question || '').trim();
+  const cleanOpts = Array.isArray(options) ? options.map((o: any) => String(o || '').trim()).filter(Boolean) : [];
+  if (!cleanQ || cleanOpts.length < 2) {
+    return res.status(400).json({ success: false, error: 'Question and at least 2 options are required.' });
+  }
+  const poll = {
+    id: `poll_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    question: cleanQ,
+    category: 'Matchday Debate',
+    authorName: String(authorName || 'Football Fan').slice(0, 32),
+    options: cleanOpts.slice(0, 4).map((label: string, idx: number) => ({
+      id: `opt_${idx + 1}`,
+      label,
+      votes: idx === 0 ? 1 : 0,
+    })),
+    voters: { [userId]: 'opt_1' },
+    createdAt: new Date().toISOString(),
+  };
+  inMemoryArenaPolls.unshift(poll);
+  scheduleStorePersist();
+  return res.json({
+    success: true,
+    poll: {
+      id: poll.id,
+      question: poll.question,
+      category: poll.category,
+      authorName: poll.authorName,
+      options: poll.options,
+      totalVotes: 1,
+      userVotedOptionId: 'opt_1',
+    },
+  });
+});
+
+app.post('/api/arena/polls/:id/vote', (req, res) => {
+  const poll = inMemoryArenaPolls.find(p => p.id === req.params.id);
+  if (!poll) return res.status(404).json({ success: false, error: 'Poll not found' });
+  const { userId = 'guest_user', optionId } = req.body || {};
+  const alreadyVoted = Boolean(poll.voters?.[userId]);
+  if (!alreadyVoted) {
+    const targetOpt = poll.options.find(o => o.id === optionId);
+    if (!targetOpt) return res.status(400).json({ success: false, error: 'Invalid option' });
+    targetOpt.votes += 1;
+    if (!poll.voters) poll.voters = {};
+    poll.voters[userId] = optionId;
+    scheduleStorePersist();
+  }
+  return res.json({
+    success: true,
+    alreadyVoted,
+    poll: {
+      id: poll.id,
+      question: poll.question,
+      category: poll.category,
+      authorName: poll.authorName,
+      options: poll.options,
+      totalVotes: poll.options.reduce((acc, o) => acc + Number(o.votes || 0), 0),
+      userVotedOptionId: poll.voters?.[userId] || null,
+    },
   });
 });
 
@@ -3375,7 +4175,7 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
     const { folder, mediaKind } = resolveMediaFolderAndKind(bucket, mimeType);
 
     const maxShortSec = isFutubeBucket ? 60 : 120;
-    const maxVideoSec = isFutubeBucket ? 3600 : 180;
+    const maxVideoSec = isFutubeBucket ? 3600 : 600;
 
     let detectedVideoKind: 'short' | 'video' | undefined;
     let detectedAspectRatio: '9:16' | '16:9' | undefined;
@@ -3384,18 +4184,15 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
     if (mediaKind === 'video') {
       if (widthHeader > 0 && heightHeader > 0) {
         const ratio = widthHeader / heightHeader;
-        if (ratio <= 0.85) {
+        if (ratio < 1.0 && !isFutubeBucket) {
           detectedVideoKind = 'short';
           detectedAspectRatio = '9:16';
-        } else if (ratio >= 1.15 || isFutubeBucket) {
+        } else if (ratio <= 0.85) {
+          detectedVideoKind = 'short';
+          detectedAspectRatio = '9:16';
+        } else {
           detectedVideoKind = 'video';
           detectedAspectRatio = '16:9';
-        } else {
-          return res.status(400).json({
-            success: false,
-            status: 'ERROR',
-            error: `Unsupported video dimensions (${widthHeader}x${heightHeader}). Upload a 9:16 Quick Kick (≤ ${maxShortSec}s) or a 16:9 Clip.`,
-          });
         }
       } else if (requestedKind === 'video' || requestedAspect === '16:9') {
         detectedVideoKind = 'video';
@@ -3523,9 +4320,8 @@ app.post('/api/media/copyright-check', (req, res) => {
   let buffer: Buffer | null = null;
 
   if (typeof videoUrl === 'string' && videoUrl.startsWith('/uploads/')) {
-    const safeRel = videoUrl.replace(/^\/uploads\//, '');
-    const candidatePath = path.join(UPLOADS_DIR, safeRel);
-    if (fs.existsSync(candidatePath)) {
+    const candidatePath = resolveSafeUploadPath(videoUrl);
+    if (candidatePath && fs.existsSync(candidatePath)) {
       try {
         buffer = fs.readFileSync(candidatePath);
       } catch {}
@@ -3564,10 +4360,10 @@ app.post('/api/media/copyright-registry', (req, res) => {
   }
 });
 
-app.post('/api/media/upload', express.raw({ type: '*/*', limit: '500mb' }), handleBinaryMediaUpload);
-app.post('/api/db/upload-binary', express.raw({ type: '*/*', limit: '500mb' }), handleBinaryMediaUpload);
+app.post('/api/media/upload', uploadLimiter, express.raw({ type: '*/*', limit: '500mb' }), handleBinaryMediaUpload);
+app.post('/api/db/upload-binary', uploadLimiter, express.raw({ type: '*/*', limit: '500mb' }), handleBinaryMediaUpload);
 
-app.post('/api/db/upload', async (req, res) => {
+app.post('/api/db/upload', uploadLimiter, async (req, res) => {
   const { fileData, fileName, bucket = 'post-images', userId = 'user' } = req.body;
   if (!fileData) {
     return res.status(400).json({ success: false, status: 'ERROR', error: 'File data required' });
@@ -4666,7 +5462,7 @@ Keep it under 180 words with bold highlights.`;
 
   const aiText = await invokeGeminiSafely(prompt, { timeoutMs: 5500 });
   if (aiText) {
-    return res.json({ success: true, recap: aiText, source: 'gemini-4-hydrogen' });
+    return res.json({ success: true, recap: aiText, source: 'futfield-pitchiq' });
   }
 
   const homeScore = Number(match.homeTeam.score ?? 0);
@@ -4708,7 +5504,7 @@ Rules:
 
   const aiText = await invokeGeminiSafely(prompt, { timeoutMs: 6000 });
   if (aiText) {
-    return res.json({ success: true, answer: aiText, source: 'gemini-4-hydrogen' });
+    return res.json({ success: true, answer: aiText, source: 'futfield-pitchiq' });
   }
 
   const q = cleanQuestion.toLowerCase();
@@ -4737,7 +5533,7 @@ app.post('/api/ai/translate', async (req, res) => {
   return res.json({
     success: true,
     translatedText: aiText || cleanText,
-    source: aiText ? 'gemini-4-hydrogen' : 'passthrough',
+    source: aiText ? 'futfield-pitchiq' : 'passthrough',
   });
 });
 
@@ -4967,7 +5763,7 @@ app.post('/api/monetization/payout', (req, res) => {
   });
 });
 
-// Google AI Studio Monetization & Creator Revenue Optimizer
+// Creator Revenue Optimizer API
 app.post('/api/ai/monetization-advisor', async (req, res) => {
   const {
     creatorHandle = '@creator',
@@ -5261,57 +6057,259 @@ app.get('/api/subscriptions/check/:userId', async (req, res) => {
   });
 });
 
-app.get('/api/ip-country', async (req, res) => {
+// -------------------------------------------------------------
+// Free Backend IP Geolocation, Live USD FX Rates & Paystack Pricing
+// Stagnant USD pricing ($12 Pro / $25 VIP / $36 Season / $7.20/mo)
+// -------------------------------------------------------------
+const STAGNANT_USD_PLANS = {
+  pro: { tier: 'pro' as const, name: 'Matchday Pro Pass', usdPrice: 12, days: 30, effectiveMonthlyUsd: 12, bonusFp: 500 },
+  vip: { tier: 'vip' as const, name: 'Club VIP Ultra Pass', usdPrice: 25, days: 90, effectiveMonthlyUsd: 8.33, bonusFp: 2000 },
+  season: { tier: 'season' as const, name: 'Championship Season Pass', usdPrice: 36, days: 150, effectiveMonthlyUsd: 7.2, bonusFp: 5000 },
+};
+
+const FALLBACK_USD_RATES: Record<string, number> = {
+  USD: 1, NGN: 1600, GHS: 15.8, KES: 129, ZAR: 18.2, EGP: 49.5, UGX: 3700, TZS: 2650,
+  XOF: 605, XAF: 605, MAD: 9.8, EUR: 0.92, GBP: 0.78, CAD: 1.38, AUD: 1.52,
+  INR: 84.5, BRL: 5.75, JPY: 153, AED: 3.67, SAR: 3.75, TRY: 34.4, CHF: 0.88,
+  SEK: 10.6, NOK: 10.9, DKK: 6.86, PLN: 4.02, MXN: 20.1, ARS: 995, COP: 4350,
+  PKR: 278, BDT: 119.5, IDR: 15750, MYR: 4.42, PHP: 58.6, SGD: 1.34, KRW: 1390, CNY: 7.22,
+};
+
+const COUNTRY_TO_META: Record<string, { name: string; currency: string }> = {
+  NG: { name: 'Nigeria', currency: 'NGN' },
+  GH: { name: 'Ghana', currency: 'GHS' },
+  KE: { name: 'Kenya', currency: 'KES' },
+  ZA: { name: 'South Africa', currency: 'ZAR' },
+  EG: { name: 'Egypt', currency: 'EGP' },
+  UG: { name: 'Uganda', currency: 'UGX' },
+  TZ: { name: 'Tanzania', currency: 'TZS' },
+  CI: { name: "Côte d'Ivoire", currency: 'XOF' },
+  SN: { name: 'Senegal', currency: 'XOF' },
+  CM: { name: 'Cameroon', currency: 'XAF' },
+  MA: { name: 'Morocco', currency: 'MAD' },
+  US: { name: 'United States', currency: 'USD' },
+  GB: { name: 'United Kingdom', currency: 'GBP' },
+  CA: { name: 'Canada', currency: 'CAD' },
+  AU: { name: 'Australia', currency: 'AUD' },
+  DE: { name: 'Germany', currency: 'EUR' },
+  FR: { name: 'France', currency: 'EUR' },
+  ES: { name: 'Spain', currency: 'EUR' },
+  IT: { name: 'Italy', currency: 'EUR' },
+  NL: { name: 'Netherlands', currency: 'EUR' },
+  PT: { name: 'Portugal', currency: 'EUR' },
+  IE: { name: 'Ireland', currency: 'EUR' },
+  BE: { name: 'Belgium', currency: 'EUR' },
+  IN: { name: 'India', currency: 'INR' },
+  BR: { name: 'Brazil', currency: 'BRL' },
+  JP: { name: 'Japan', currency: 'JPY' },
+  AE: { name: 'United Arab Emirates', currency: 'AED' },
+  SA: { name: 'Saudi Arabia', currency: 'SAR' },
+  TR: { name: 'Turkey', currency: 'TRY' },
+  MX: { name: 'Mexico', currency: 'MXN' },
+};
+
+const PAYSTACK_SETTLEMENT_CURRENCIES = new Set(['NGN', 'GHS', 'ZAR', 'KES', 'XOF', 'USD']);
+const ZERO_DECIMAL_CURRENCIES = new Set(['JPY', 'KRW', 'UGX', 'XOF', 'XAF']);
+
+let cachedRates: { rates: Record<string, number>; timestamp: number } | null = null;
+async function getLiveUsdRates(): Promise<Record<string, number>> {
+  const now = Date.now();
+  if (cachedRates && now - cachedRates.timestamp < 3600_000) {
+    return cachedRates.rates;
+  }
   try {
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket.remoteAddress || '';
-    const ipQuery = ip && ip !== '127.0.0.1' && ip !== '::1' ? ip : '';
-
-    try {
-      const apiRes = await fetch(`https://ipapi.co/${ipQuery ? ipQuery + '/' : ''}json/`, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (apiRes.ok) {
-        const data = await apiRes.json();
-        if (data && data.country_code) {
-          return res.json({
-            success: true,
-            country_code: data.country_code.toUpperCase(),
-            country_name: data.country_name || 'Nigeria',
-            currency: data.currency || (data.country_code === 'NG' ? 'NGN' : 'USD'),
-            city: data.city,
-          });
-        }
+    const ratesRes = await fetch('https://open.er-api.com/v6/latest/USD', {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (ratesRes.ok) {
+      const data = await ratesRes.json();
+      if (data?.rates && typeof data.rates === 'object') {
+        const merged = { ...FALLBACK_USD_RATES, ...data.rates, USD: 1 };
+        cachedRates = { rates: merged, timestamp: now };
+        return merged;
       }
-    } catch {}
+    }
+  } catch {}
+  return { ...FALLBACK_USD_RATES };
+}
 
-    try {
-      const whoRes = await fetch(`https://ipwho.is/${ipQuery}`, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (whoRes.ok) {
-        const whoData = await whoRes.json();
-        if (whoData && whoData.success && whoData.country_code) {
-          return res.json({
-            success: true,
-            country_code: whoData.country_code.toUpperCase(),
-            country_name: whoData.country,
-            currency: whoData.currency?.code || (whoData.country_code === 'NG' ? 'NGN' : 'USD'),
-            city: whoData.city,
-          });
-        }
+const geoIpCache = new Map<string, { timestamp: number; data: { country_code: string; country_name: string; currency: string; city?: string } }>();
+
+function formatMoneyAmount(amount: number, currency: string): string {
+  const safeCur = (currency || 'USD').toUpperCase();
+  const isZeroDec = ZERO_DECIMAL_CURRENCIES.has(safeCur) || ['NGN', 'KES', 'INR', 'TZS', 'IDR'].includes(safeCur);
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: safeCur,
+      minimumFractionDigits: safeCur === 'USD' && Number.isInteger(amount) ? 0 : isZeroDec ? 0 : 2,
+      maximumFractionDigits: isZeroDec ? 0 : 2,
+    }).format(amount);
+  } catch {
+    return `${safeCur} ${isZeroDec ? Math.round(amount).toLocaleString('en-US') : amount.toFixed(2)}`;
+  }
+}
+
+async function detectClientGeo(req: express.Request): Promise<{
+  country_code: string;
+  country_name: string;
+  currency: string;
+  city?: string;
+}> {
+  const clientIp = getClientIp(req);
+  const ipQuery = isPrivateOrLoopbackIp(clientIp) ? '' : clientIp;
+
+  // 1. Hosting / Edge proxy headers (Cloudflare, Vercel, Netlify)
+  const edgeCountry = String(
+    req.headers['cf-ipcountry'] ||
+    req.headers['x-vercel-ip-country'] ||
+    req.headers['x-country-code'] ||
+    ''
+  ).trim().toUpperCase();
+  if (edgeCountry && /^[A-Z]{2}$/.test(edgeCountry) && edgeCountry !== 'XX' && edgeCountry !== 'T1') {
+    const meta = COUNTRY_TO_META[edgeCountry];
+    return {
+      country_code: edgeCountry,
+      country_name: meta?.name || edgeCountry,
+      currency: meta?.currency || 'USD',
+    };
+  }
+
+  const cacheKey = ipQuery || '__outbound__';
+  const cached = geoIpCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < 6 * 3600_000) {
+    return cached.data;
+  }
+
+  const saveGeo = (val: { country_code: string; country_name: string; currency: string; city?: string }) => {
+    if (geoIpCache.size >= 10_000) {
+      const oldest = geoIpCache.keys().next().value;
+      if (oldest) geoIpCache.delete(oldest);
+    }
+    geoIpCache.set(cacheKey, { timestamp: Date.now(), data: val });
+    return val;
+  };
+
+  // Provider 1: ipwho.is (free, no key, reliable currency info)
+  try {
+    const whoRes = await fetch(`https://ipwho.is/${encodeURIComponent(ipQuery)}`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(2800),
+    });
+    if (whoRes.ok) {
+      const whoData = await whoRes.json();
+      if (whoData?.success && whoData.country_code) {
+        const cc = String(whoData.country_code).toUpperCase();
+        return saveGeo({
+          country_code: cc,
+          country_name: whoData.country || COUNTRY_TO_META[cc]?.name || cc,
+          currency: String(whoData.currency?.code || COUNTRY_TO_META[cc]?.currency || 'USD').toUpperCase(),
+          city: whoData.city || undefined,
+        });
       }
-    } catch {}
+    }
   } catch {}
 
-  return res.json({
-    success: true,
+  // Provider 2: ipapi.co (free fallback)
+  try {
+    const apiRes = await fetch(`https://ipapi.co/${ipQuery ? encodeURIComponent(ipQuery) + '/' : ''}json/`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(2800),
+    });
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      if (data?.country_code) {
+        const cc = String(data.country_code).toUpperCase();
+        return saveGeo({
+          country_code: cc,
+          country_name: data.country_name || COUNTRY_TO_META[cc]?.name || cc,
+          currency: String(data.currency || COUNTRY_TO_META[cc]?.currency || 'USD').toUpperCase(),
+          city: data.city || undefined,
+        });
+      }
+    }
+  } catch {}
+
+  // Provider 3: ip-api.com (free fallback)
+  try {
+    const ipApiRes = await fetch(`http://ip-api.com/json/${encodeURIComponent(ipQuery)}?fields=status,countryCode,country,city,currency`, {
+      signal: AbortSignal.timeout(2800),
+    });
+    if (ipApiRes.ok) {
+      const d = await ipApiRes.json();
+      if (d?.status === 'success' && d.countryCode) {
+        const cc = String(d.countryCode).toUpperCase();
+        return saveGeo({
+          country_code: cc,
+          country_name: d.country || COUNTRY_TO_META[cc]?.name || cc,
+          currency: String(d.currency || COUNTRY_TO_META[cc]?.currency || 'USD').toUpperCase(),
+          city: d.city || undefined,
+        });
+      }
+    }
+  } catch {}
+
+  return {
     country_code: 'NG',
     country_name: 'Nigeria',
     currency: 'NGN',
-  });
+  };
+}
+
+app.get('/api/ip-country', async (req, res) => {
+  try {
+    const geo = await detectClientGeo(req);
+    return res.json({ success: true, ...geo });
+  } catch {
+    return res.json({ success: true, country_code: 'NG', country_name: 'Nigeria', currency: 'NGN' });
+  }
+});
+
+app.get('/api/geo/ip-pricing', async (req, res) => {
+  try {
+    const overrideCurrency = String(req.query.currency || '').trim().toUpperCase();
+    const [geo, rates] = await Promise.all([detectClientGeo(req), getLiveUsdRates()]);
+    const detectedCurrency = overrideCurrency && rates[overrideCurrency] ? overrideCurrency : geo.currency;
+    const rate = Number(rates[detectedCurrency] || 1);
+
+    const plans = (Object.values(STAGNANT_USD_PLANS)).map((p) => {
+      const rawLocal = p.usdPrice * rate;
+      const isWholeCur = ZERO_DECIMAL_CURRENCIES.has(detectedCurrency) || ['NGN', 'KES', 'INR', 'TZS', 'IDR'].includes(detectedCurrency);
+      const localAmount = isWholeCur ? Math.round(rawLocal) : +rawLocal.toFixed(2);
+      return {
+        id: p.tier,
+        name: p.name,
+        days: p.days,
+        usdPrice: p.usdPrice,
+        usdFormatted: `$${p.usdPrice}`,
+        effectiveMonthlyUsd: p.effectiveMonthlyUsd,
+        localCurrency: detectedCurrency,
+        localAmount,
+        localFormatted: formatMoneyAmount(localAmount, detectedCurrency),
+        exchangeRate: rate,
+      };
+    });
+
+    return res.json({
+      success: true,
+      country_code: geo.country_code,
+      country_name: geo.country_name,
+      city: geo.city,
+      currency: detectedCurrency,
+      exchange_rate: rate,
+      stagnant_usd_base: {
+        pro: 12,
+        vip: 25,
+        season: 36,
+        lowestMonthlyUsd: 7.2,
+      },
+      paystack_direct_currency: PAYSTACK_SETTLEMENT_CURRENCIES.has(detectedCurrency) ? detectedCurrency : 'USD',
+      rates,
+      plans,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Unable to compute regional pricing.' });
+  }
 });
 
 // Paystack Key Status Check (Real validation only)
@@ -5368,40 +6366,12 @@ app.get('/api/paystack/status', async (req, res) => {
 });
 
 // Real-time currency conversion tool via free API
-let cachedRates: { rates: Record<string, number>; timestamp: number } | null = null;
-app.get('/api/exchange-rates', async (req, res) => {
-  try {
-    const now = Date.now();
-    if (cachedRates && now - cachedRates.timestamp < 3600000) {
-      return res.json({ success: true, base: 'USD', rates: cachedRates.rates });
-    }
-
-    const ratesRes = await fetch('https://open.er-api.com/v6/latest/USD', {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (ratesRes.ok) {
-      const data = await ratesRes.json();
-      if (data?.rates) {
-        cachedRates = { rates: data.rates, timestamp: now };
-        return res.json({ success: true, base: 'USD', rates: data.rates });
-      }
-    }
-  } catch {}
-
-  return res.json({
-    success: true,
-    base: 'USD',
-    rates: {
-      NGN: 1600,
-      EUR: 0.92,
-      GBP: 0.78,
-      CAD: 1.35,
-      USD: 1,
-    },
-  });
+app.get('/api/exchange-rates', async (_req, res) => {
+  const rates = await getLiveUsdRates();
+  return res.json({ success: true, base: 'USD', rates });
 });
 
-app.post('/api/paystack/initialize', async (req, res) => {
+app.post('/api/paystack/initialize', paystackLimiter, async (req, res) => {
   const {
     email,
     user_id = 'user_guest',
@@ -5412,8 +6382,8 @@ app.post('/api/paystack/initialize', async (req, res) => {
     metadata = {},
   } = req.body || {};
 
-  if (!email) {
-    return res.status(400).json({ success: false, error: 'Email is required to start Paystack checkout.' });
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+    return res.status(400).json({ success: false, error: 'Valid billing email is required to start Paystack checkout.' });
   }
 
   if (!PAYSTACK_SECRET_KEY) {
@@ -5423,22 +6393,28 @@ app.post('/api/paystack/initialize', async (req, res) => {
     });
   }
 
-  const useNgn =
-    preferred_currency === 'NGN' ||
-    (preferred_currency !== 'USD' && country?.toUpperCase() === 'NG');
+  const rates = await getLiveUsdRates();
   const spec = getTierPricingSpec(plan_type);
-  let subunitAmount = useNgn ? spec.ngnSubunit : spec.usdSubunit;
-  let currency: 'NGN' | 'USD' = useNgn ? 'NGN' : 'USD';
+  const requestedCur = String(preferred_currency || (country?.toUpperCase() === 'NG' ? 'NGN' : 'USD')).toUpperCase();
 
-  const reference = `futfield_${useNgn ? 'ng' : 'global'}_${spec.tier}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const origin = (req.headers.origin as string) || process.env.APP_URL || 'https://futfieldsport.com.ng';
+  // Keep USD base strictly stagnant ($12 / $25 / $36); convert dynamically via live FX to Paystack-supported settlement currency
+  let currency = PAYSTACK_SETTLEMENT_CURRENCIES.has(requestedCur) ? requestedCur : 'USD';
+  const liveRate = Number(rates[currency] || (currency === 'NGN' ? 1600 : 1));
+  const ngnLiveSubunit = Math.round(spec.usdPrice * Number(rates.NGN || 1600)) * 100;
+  let subunitAmount =
+    currency === 'USD'
+      ? spec.usdSubunit
+      : Math.round(spec.usdPrice * liveRate * (ZERO_DECIMAL_CURRENCIES.has(currency) ? 1 : 100));
+
+  const reference = `futfield_${currency.toLowerCase()}_${spec.tier}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const origin = (req.headers.origin as string) || process.env.APP_URL || 'https://futfieldsports.com.ng';
   const finalCallbackUrl = callback_url || `${origin.replace(/\/$/, '')}/payment/callback`;
 
   paystackTransactions[reference] = {
     reference,
     userId: user_id,
     email,
-    amount: subunitAmount / 100,
+    amount: ZERO_DECIMAL_CURRENCIES.has(currency) ? subunitAmount : subunitAmount / 100,
     currency,
     tier: spec.tier,
     status: 'pending',
@@ -5463,6 +6439,8 @@ app.post('/api/paystack/initialize', async (req, res) => {
           ...metadata,
           user_id,
           plan_type: spec.tier,
+          stagnant_usd_price: spec.usdPrice,
+          detected_currency: requestedCur,
           country,
           settlement: 'Paystack Worldwide Gateway',
           app: 'Futfield',
@@ -5472,8 +6450,8 @@ app.post('/api/paystack/initialize', async (req, res) => {
 
     let data = await paystackResponse.json();
 
-    // Retry in NGN equivalent if merchant Paystack profile restricts USD currency
-    if (!data?.status && currency === 'USD') {
+    // Retry in live-FX NGN equivalent if merchant Paystack profile settles in NGN only
+    if (!data?.status && currency !== 'NGN') {
       const retryRes = await fetch('https://api.paystack.co/transaction/initialize', {
         method: 'POST',
         headers: {
@@ -5482,7 +6460,7 @@ app.post('/api/paystack/initialize', async (req, res) => {
         },
         body: JSON.stringify({
           email,
-          amount: spec.ngnSubunit,
+          amount: ngnLiveSubunit,
           currency: 'NGN',
           reference,
           callback_url: finalCallbackUrl,
@@ -5490,6 +6468,7 @@ app.post('/api/paystack/initialize', async (req, res) => {
             ...metadata,
             user_id,
             plan_type: spec.tier,
+            stagnant_usd_price: spec.usdPrice,
             country,
             fallback_converted: true,
             app: 'Futfield',
@@ -5498,7 +6477,7 @@ app.post('/api/paystack/initialize', async (req, res) => {
       });
       data = await retryRes.json();
       if (data?.status) {
-        subunitAmount = spec.ngnSubunit;
+        subunitAmount = ngnLiveSubunit;
         currency = 'NGN';
         paystackTransactions[reference].amount = subunitAmount / 100;
         paystackTransactions[reference].currency = currency;
@@ -5514,6 +6493,7 @@ app.post('/api/paystack/initialize', async (req, res) => {
         publicKey: PAYSTACK_PUBLIC_KEY || undefined,
         amount: subunitAmount,
         currency,
+        usd_base_price: spec.usdPrice,
         plan_type: spec.tier,
       });
     }
@@ -5614,12 +6594,12 @@ async function handlePaystackVerify(req: express.Request, res: express.Response)
   });
 }
 
-app.get('/api/paystack/verify/:reference', handlePaystackVerify);
-app.post('/api/paystack/verify/:reference', handlePaystackVerify);
-app.post('/api/paystack/verify', handlePaystackVerify);
+app.get('/api/paystack/verify/:reference', paystackLimiter, handlePaystackVerify);
+app.post('/api/paystack/verify/:reference', paystackLimiter, handlePaystackVerify);
+app.post('/api/paystack/verify', paystackLimiter, handlePaystackVerify);
 
 app.post('/api/paystack/webhook', async (req: any, res) => {
-  const signature = req.headers['x-paystack-signature'] as string;
+  const signature = String(req.headers['x-paystack-signature'] || '').trim();
 
   if (PAYSTACK_SECRET_KEY) {
     if (!signature) {
@@ -5632,8 +6612,10 @@ app.post('/api/paystack/webhook', async (req: any, res) => {
         .update(payloadForHmac)
         .digest('hex');
 
-      if (hash !== signature) {
-        console.warn('[Paystack Webhook] Invalid signature match');
+      const hashBuf = Buffer.from(hash, 'utf8');
+      const sigBuf = Buffer.from(signature, 'utf8');
+      if (hashBuf.length !== sigBuf.length || !crypto.timingSafeEqual(hashBuf, sigBuf)) {
+        console.warn('[Paystack Webhook] Invalid timing-safe signature match');
         return res.status(401).send('Unauthorized webhook signature');
       }
     } catch (cryptoErr) {
@@ -5980,8 +6962,8 @@ async function refreshMatchesCache(targetDate?: string) {
 
         const homeTeamId = matchObj.home?.id;
         const awayTeamId = matchObj.away?.id;
-        const homeCrest = homeTeamId ? `https://images.fotmob.com/image_resources/logo/teamlogo/${homeTeamId}.png` : '';
-        const awayCrest = awayTeamId ? `https://images.fotmob.com/image_resources/logo/teamlogo/${awayTeamId}.png` : '';
+        const homeCrest = '';
+        const awayCrest = '';
         const kickoff = matchObj.time || matchObj.status?.startTimeStr || '20:00';
         const stadiumName = matchObj.status?.venue || 'Football Stadium';
 
@@ -6083,6 +7065,34 @@ if (!IS_SERVERLESS) {
   setInterval(() => {
     refreshMatchesCache(getDateOffsetYYYYMMDD(0)).catch(() => {});
   }, 30_000);
+
+  // Bounded cache & presence pruning every 60s for 1M+ user scalability
+  setInterval(() => {
+    const now = Date.now();
+    for (let i = inMemoryRoomPresence.length - 1; i >= 0; i--) {
+      if (now - inMemoryRoomPresence[i].lastSeen > 120_000) {
+        inMemoryRoomPresence.splice(i, 1);
+      }
+    }
+    for (const [mId, list] of Object.entries(inMemoryTypingIndicators)) {
+      const fresh = list.filter((t) => now - t.timestamp < 10_000);
+      if (fresh.length === 0) delete inMemoryTypingIndicators[mId];
+      else inMemoryTypingIndicators[mId] = fresh;
+    }
+    for (const [emailKey, rec] of passwordResetTokens) {
+      if (rec.expiresAt <= now) passwordResetTokens.delete(emailKey);
+    }
+    while (matchesCacheByDate.size > 14) {
+      const oldest = matchesCacheByDate.keys().next().value;
+      if (oldest) matchesCacheByDate.delete(oldest);
+      else break;
+    }
+    while (matchDetailsCache.size > 400) {
+      const oldest = matchDetailsCache.keys().next().value;
+      if (oldest) matchDetailsCache.delete(oldest);
+      else break;
+    }
+  }, 60_000);
 }
 
 app.get('/api/football/status', async (req, res) => {
@@ -6339,7 +7349,7 @@ async function refreshLivePlayersPool(): Promise<FootballPlayer[]> {
           age: 25,
           rating: 86,
           marketValue: 'Top Scorer List',
-          photoUrl: pid ? `https://images.fotmob.com/image_resources/playerimages/${pid}.png` : DEFAULT_AVATAR,
+          photoUrl: DEFAULT_AVATAR,
           stats: { appearances: 20, goals: Number(p?.value) || 8, assists: 4, passAccuracy: 83 },
           preferredFoot: 'Right',
           playingStyle: 'Premier League Live Leader',
@@ -6418,7 +7428,7 @@ app.get('/api/football/players', async (req, res) => {
               age: 25,
               rating: 84,
               marketValue: 'Live Profile',
-              photoUrl: hit.id ? `https://images.fotmob.com/image_resources/playerimages/${hit.id}.png` : DEFAULT_AVATAR,
+              photoUrl: DEFAULT_AVATAR,
               stats: { appearances: 20, goals: 6, assists: 4, passAccuracy: 82 },
               preferredFoot: 'Right',
               playingStyle: 'Live Scout Match',
@@ -6495,7 +7505,7 @@ app.get('/api/football/player/:id', async (req, res) => {
               age: details?.age || localPlayer?.age || 25,
               rating: 85,
               marketValue: details?.playerInformation?.find((x: any) => x.title === 'Market value')?.value?.fallback || 'Pro Player',
-              photoUrl: `https://images.fotmob.com/image_resources/playerimages/${rawId}.png`,
+              photoUrl: DEFAULT_AVATAR,
               stats: {
                 appearances: findStat('matches') || findStat('started') || localPlayer?.stats.appearances || 18,
                 goals: findStat('goals') || localPlayer?.stats.goals || 5,
@@ -6553,7 +7563,7 @@ app.get('/api/football/leagues/:leagueId/table', async (req, res) => {
             position: row.idx || row.position || i + 1,
             teamId: row.id,
             teamName: row.name || row.shortName || 'Team',
-            logoUrl: row.id ? `https://images.fotmob.com/image_resources/logo/teamlogo/${row.id}.png` : undefined,
+            logoUrl: undefined,
             played: row.played || 0,
             won: row.wins || 0,
             drawn: row.draws || 0,
@@ -6657,8 +7667,8 @@ const inMemoryFanReviews: FanReviewRecord[] = [
     entryType: 'blog',
     authorName: 'Mateo R.',
     authorHandle: '@mateo_tactics',
-    title: 'Why 9:16 Shorts + 16:9 Tactical Videos Separate Futfield',
-    body: 'Most apps cram highlight clips into one messy feed. Having dedicated under-2m vertical PitchReels for matchday energy and 3m 16:9 videos for pressing analysis is genius.',
+    title: 'Why 9:16 Quick Kicks + 16:9 Clips Separate Futfield',
+    body: 'Most apps cram highlight clips into one messy feed. Having dedicated vertical 9:16 Quick Kicks for matchday energy and 16:9 Futfield Tube videos for tactical analysis is genius.',
     rating: 5,
     helpfulCount: 12,
     createdAt: new Date().toISOString().slice(0, 10),
@@ -6703,9 +7713,9 @@ app.post('/api/reviews/:id/upvote', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// Viral SEO Endpoints: /robots.txt & Dynamic /sitemap.xml (futfieldsport.com.ng)
+// Viral SEO Endpoints: /robots.txt & Dynamic /sitemap.xml (futfieldsports.com.ng)
 // -------------------------------------------------------------
-const SEO_CANONICAL_DOMAIN = 'https://futfieldsport.com.ng';
+const SEO_CANONICAL_DOMAIN = 'https://futfieldsports.com.ng';
 
 app.get('/robots.txt', (_req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -6755,7 +7765,7 @@ app.get('/sitemap.xml', (_req, res) => {
   }
 
   // Collect dynamic /profile/:username URLs
-  const profileSet = new Set<string>(['@futfield', '@emirates_gunner', '@tactical_scout']);
+  const profileSet = new Set<string>(['@futfield', '@emirates_gunner']);
   for (const prof of Object.values(inMemoryProfiles)) {
     if (prof?.handle) profileSet.add(String(prof.handle));
   }
@@ -6816,6 +7826,9 @@ if (!IS_SERVERLESS) {
       warmMultiDayMatches().catch(() => {});
     }, 150);
   });
+
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 
   server.on('error', (err: any) => {
     if (err.code === 'EADDRINUSE') {

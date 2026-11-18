@@ -4,7 +4,6 @@ import {
   Crown,
   FileVideo,
   Image as ImageIcon,
-  Sparkles,
   Upload,
   X,
   Zap,
@@ -13,7 +12,6 @@ import { useFootball } from '../../context/FootballContext';
 import { VideoItem } from '../../types/football';
 import {
   captureThreeVideoThumbnails,
-  compressVideoInBrowser,
   formatBytesToMb,
   inspectVideoMetadata,
   uploadFileToBackend,
@@ -21,6 +19,7 @@ import {
 import { publishFutubeVideo } from '../../services/supabaseClient';
 import { FutfieldTubeLogo } from './FutfieldTubeLogo';
 import { haptics } from '../../utils/haptics';
+import { isCreatorEmail, isReservedFutfieldText } from '../../utils/creatorGuard';
 
 interface FutfieldTubeUploadModalProps {
   onClose: () => void;
@@ -52,7 +51,6 @@ export const FutfieldTubeUploadModal: React.FC<FutfieldTubeUploadModalProps> = (
   const [tagsInput, setTagsInput] = useState('#Goals #FutfieldTube');
   const [clubTag, setClubTag] = useState(user.favoriteClub !== 'Not Set' ? user.favoriteClub : 'Arsenal');
   const [visibility, setVisibility] = useState<'public' | 'squad' | 'private'>('public');
-  const [compressEnabled, setCompressEnabled] = useState(true);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoMeta, setVideoMeta] = useState<{
@@ -153,27 +151,23 @@ export const FutfieldTubeUploadModal: React.FC<FutfieldTubeUploadModalProps> = (
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile || !videoMeta || !title.trim()) return;
+    if (
+      !isCreatorEmail(user.email) &&
+      (isReservedFutfieldText(user.name) || isReservedFutfieldText(user.handle))
+    ) {
+      setErrorMsg('The name "Futfield" is strictly reserved for the official Futfield Creator account.');
+      return;
+    }
     setErrorMsg(null);
     setStep('processing');
-    setProcessStage(compressEnabled ? `Compressing clip (${isProUser ? '1080p Pro' : '720p'})...` : 'Preparing upload...');
-    setProcessPct(8);
+    setProcessStage('Uploading to Futfield PitchCloud HD Storage...');
+    setProcessPct(25);
 
-    let fileToUpload = selectedFile;
-    if (compressEnabled) {
-      const compressed = await compressVideoInBrowser(
-        selectedFile,
-        isProUser ? 1080 : 720,
-        (pct) => setProcessPct(Math.max(8, Math.round(pct * 0.4)))
-      );
-      fileToUpload = compressed.file;
-    }
-
-    setProcessStage('Uploading to Supabase futfield-videos storage...');
     const uploadRes = await uploadFileToBackend(
-      fileToUpload,
+      selectedFile,
       'futfield-videos',
-      fileToUpload.name,
-      (pct) => setProcessPct(40 + Math.round(pct * 0.5)),
+      selectedFile.name,
+      (pct) => setProcessPct(25 + Math.round(pct * 0.65)),
       user.id,
       {
         durationSeconds: videoMeta.duration,
@@ -192,7 +186,7 @@ export const FutfieldTubeUploadModal: React.FC<FutfieldTubeUploadModalProps> = (
       return;
     }
 
-    setProcessStage('Finalizing FanZone Clip & English + Pidgin Captions...');
+    setProcessStage('Finalizing FanZone Clip & Preparing HD Stream...');
     setProcessPct(95);
 
     const parsedTags = tagsInput
@@ -297,7 +291,7 @@ export const FutfieldTubeUploadModal: React.FC<FutfieldTubeUploadModalProps> = (
             <input
               ref={videoInputRef}
               type="file"
-              accept="video/mp4,video/quicktime,video/webm,video/*"
+              accept="video/*,.mp4,.mov,.m4v,.webm,.3gp"
               onChange={handleChooseVideo}
               className="hidden"
             />
@@ -462,13 +456,13 @@ export const FutfieldTubeUploadModal: React.FC<FutfieldTubeUploadModalProps> = (
                       key={`${tUrl}-${idx}`}
                       type="button"
                       onClick={() => setSelectedThumbUrl(tUrl)}
-                      className={`relative aspect-video rounded-xl overflow-hidden border-2 transition-all ${
+                      className={`relative aspect-video rounded-xl overflow-hidden bg-black border-2 transition-colors ${
                         selectedThumbUrl === tUrl
                           ? 'border-[#00C853] ring-2 ring-[#00C853]/30'
-                          : 'border-transparent opacity-75 hover:opacity-100'
+                          : 'border-transparent opacity-80 hover:opacity-100'
                       }`}
                     >
-                      <img src={tUrl} alt={`Frame ${idx + 1}`} className="w-full h-full object-cover" />
+                      <img src={tUrl} alt={`Frame ${idx + 1}`} className="w-full h-full object-contain bg-black" />
                       {selectedThumbUrl === tUrl && (
                         <span className="absolute top-1 right-1 w-5 h-5 rounded-full bg-[#00C853] text-black flex items-center justify-center">
                           <CheckCircle2 className="w-3.5 h-3.5" />
@@ -483,27 +477,6 @@ export const FutfieldTubeUploadModal: React.FC<FutfieldTubeUploadModalProps> = (
                 </p>
               )}
             </div>
-
-            {/* Browser Compression Option */}
-            <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-black/30 border border-slate-200 dark:border-white/10 cursor-pointer text-xs">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[#00C853]" />
-                <div>
-                  <span className="font-bold text-slate-900 dark:text-white block">
-                    Compress in browser before upload ({isProUser ? '1080p' : '720p'})
-                  </span>
-                  <span className="text-[10px] text-slate-500 dark:text-white/50">
-                    Saves mobile data before pushing to futfield-videos bucket
-                  </span>
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={compressEnabled}
-                onChange={(e) => setCompressEnabled(e.target.checked)}
-                className="w-4 h-4 accent-[#00C853]"
-              />
-            </label>
 
             <button
               type="submit"

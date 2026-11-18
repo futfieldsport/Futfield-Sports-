@@ -15,8 +15,6 @@ import {
   ChevronLeft,
   Heart,
   Share2,
-  Brain,
-  BrainCircuit,
   BarChart3,
   X,
   Target,
@@ -29,6 +27,7 @@ import { ClubLogo } from '../Common/ClubLogo';
 import { fetchAiMatchPrediction } from '../../services/supabaseClient';
 import { haptics } from '../../utils/haptics';
 import { useHaptics } from '../../hooks/useHaptics';
+import { buildMatchShareUrl } from '../../utils/share';
 
 export const ScoresTab: React.FC = () => {
   const {
@@ -749,11 +748,11 @@ export const ScoresTab: React.FC = () => {
                 >
                   <div className="flex items-center justify-between text-xs">
                     <div className="flex items-center gap-1.5 font-bold text-slate-800 dark:text-white/90">
-                      <BrainCircuit className="w-3.5 h-3.5 text-emerald-600 dark:text-[#00E676]" />
+                      <BarChart3 className="w-3.5 h-3.5 text-emerald-600 dark:text-[#00E676]" />
                       <span>Tactical Win Probability</span>
                     </div>
                     <div className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-[#00E676]">
-                      <Brain className="w-3 h-3" />
+                      <Activity className="w-3 h-3" />
                       <span>Tactics &amp; Form</span>
                       <ChevronRight className="w-3 h-3" />
                     </div>
@@ -846,17 +845,12 @@ export const ScoresTab: React.FC = () => {
 
                   <button
                     onClick={() => {
-                      const path = `/match/${encodeURIComponent(match.id)}`;
-                      const url =
-                        typeof window !== 'undefined' && window.location?.origin
-                          ? `${window.location.origin}${path}`
-                          : `https://futfieldsport.com.ng${path}`;
                       openShareSheet({
                         kind: 'match',
                         targetId: match.id,
                         title: `${match.homeTeam.name} ${match.homeTeam.score}-${match.awayTeam.score} ${match.awayTeam.name}`,
                         text: `${match.league} · Follow live match scores & fan room chat on FUTFIELD!`,
-                        url,
+                        url: buildMatchShareUrl(match.id),
                       });
                     }}
                     className="min-h-[38px] flex items-center gap-1.5 py-1.5 px-3 rounded-xl hover:bg-slate-200/60 dark:hover:bg-white/10 transition-colors"
@@ -1241,14 +1235,14 @@ export const ScoresTab: React.FC = () => {
               <div className="p-4 border-b border-slate-200 dark:border-white/10 flex items-center justify-between bg-gradient-to-r from-emerald-500/10 via-transparent to-sky-500/10">
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-xl bg-[#00E676]/20 border border-[#00E676]/30 flex items-center justify-center text-[#00E676]">
-                    <BrainCircuit className="w-4 h-4" />
+                    <BarChart3 className="w-4 h-4" />
                   </div>
                   <div>
                     <h3 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
                       <span>Tactical Match Prediction</span>
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-[#00E676] text-black uppercase">Tactical IQ Core</span>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-[#00E676] text-black uppercase">PitchIQ Engine</span>
                     </h3>
-                    <p className="text-[11px] text-slate-500 dark:text-white/50">Form analysis & neural probability model</p>
+                    <p className="text-[11px] text-slate-500 dark:text-white/50">Form analysis &amp; matchday probability model</p>
                   </div>
                 </div>
                 <button
@@ -1390,8 +1384,8 @@ export const ScoresTab: React.FC = () => {
                 {/* Tactical Form Breakdown */}
                 <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10 space-y-2">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-white">
-                    <Brain className="w-4 h-4 text-[#00E676]" />
-                    <span>Tactical Analysis & Pitch Intel</span>
+                    <Activity className="w-4 h-4 text-[#00E676]" />
+                    <span>Tactical Analysis &amp; Pitch Intel</span>
                   </div>
                   <p className="text-xs text-slate-600 dark:text-white/80 leading-relaxed">
                     {activeProb.tacticalBreakdown}

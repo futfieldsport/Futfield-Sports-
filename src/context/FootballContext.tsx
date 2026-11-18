@@ -50,8 +50,16 @@ import { translateText } from '../services/footballAi';
 import { applyRouteSeoMetadata, resolvePathFromAppState } from '../utils/seo';
 import type { SharePayload } from '../utils/share';
 import { scrollToTopInstant } from '../utils/scroll';
+import {
+  CREATOR_HANDLE,
+  isCreatorEmail,
+  isCreatorTarget,
+  sanitizeNonCreatorHandle,
+  sanitizeNonCreatorName,
+} from '../utils/creatorGuard';
 
 export type MainTab = 'home' | 'scores' | 'videos' | 'communities' | 'menu' | 'profile' | 'settings' | 'studio' | 'pricing' | 'support' | 'blog' | 'reviews' | 'share';
+export type HubDedicatedPage = 'predictor' | 'arena' | 'leagues' | 'vault' | null;
 
 export type SupportLegalSection =
   | 'support'
@@ -64,7 +72,7 @@ export type SupportLegalSection =
   | 'guidelines'
   | 'cookies';
 
-const DEFAULT_CREATOR_AVATAR = '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
+const DEFAULT_CREATOR_AVATAR = '/futfield-logo.jpg';
 
 export type TubeSubView = 'feed' | 'watch' | 'kicks' | 'upload' | 'fanzone';
 
@@ -382,8 +390,9 @@ interface FootballContextType {
   setShowClubSelection: (open: boolean) => void;
   activeToastNotification: AppNotification | null;
   dismissToastNotification: () => void;
-  playerScoutModalOpen: boolean;
-  setPlayerScoutModalOpen: (open: boolean) => void;
+  menuDedicatedPage: HubDedicatedPage;
+  setMenuDedicatedPage: (page: HubDedicatedPage) => void;
+  openHubFeature: (page: Exclude<HubDedicatedPage, null>) => void;
   fetchLiveMatches: (dateStr?: string) => Promise<void>;
   matchesLoading: boolean;
 
@@ -443,20 +452,29 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch {}
   }, []);
 
-  // Load user profile with clean zero defaults
+  // Load user profile with clean zero defaults & strict Futfield name reservation
   const [user, setUser] = useState<UserProfile>(() => {
     try {
       const isPurged = localStorage.getItem('futfield_profile_v6_cleared');
       if (!isPurged) return INITIAL_USER;
       const saved = localStorage.getItem('futfield_user');
-      return saved ? JSON.parse(saved) : INITIAL_USER;
+      if (!saved) return INITIAL_USER;
+      const parsed = JSON.parse(saved);
+      if (parsed && !isCreatorEmail(parsed.email)) {
+        return {
+          ...parsed,
+          name: sanitizeNonCreatorName(parsed.name, parsed.email),
+          handle: sanitizeNonCreatorHandle(parsed.handle, parsed.email),
+        };
+      }
+      return parsed || INITIAL_USER;
     } catch {
       return INITIAL_USER;
     }
   });
 
-  // Instant app entry — no blocking 5-second splash gate on load (can still replay from Settings)
-  const [showSplash, setShowSplash] = useState<boolean>(false);
+  // Always load mandatory 5-second loading screen before any app access entry
+  const [showSplash, setShowSplash] = useState<boolean>(true);
   const replaySplash = () => setShowSplash(true);
 
   // Clear and refresh profile feature
@@ -694,6 +712,14 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const toggleFollowUser = async (targetUserId: string): Promise<boolean> => {
     try {
       const res = await toggleFollowUserOnServer(user.id, targetUserId);
+      if (res.blocked || (isCreatorTarget(targetUserId) && !isCreatorEmail(user.email) && res.following)) {
+        addNotification({
+          title: 'Official Creator Protected 🔒',
+          body: res.error || 'You cannot unfollow the official Futfield Creator account.',
+          type: 'system',
+        });
+        return true;
+      }
       const isNowFollowing = res.following;
       updateUser({
         followingCount: Math.max(0, (user.followingCount || 0) + (isNowFollowing ? 1 : -1)),
@@ -707,7 +733,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       return isNowFollowing;
     } catch {
-      return false;
+      return isCreatorTarget(targetUserId) ? true : false;
     }
   };
   
@@ -934,7 +960,12 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [playerScoutModalOpen, setPlayerScoutModalOpen] = useState(false);
+  const [menuDedicatedPage, setMenuDedicatedPage] = useState<HubDedicatedPage>(null);
+  const openHubFeature = useCallback((page: Exclude<HubDedicatedPage, null>) => {
+    scrollToTopInstant();
+    setMenuDedicatedPage(page);
+    setActiveTab('menu');
+  }, []);
   const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [realtimeAnalytics, setRealtimeAnalytics] = useState<any>({
@@ -961,13 +992,23 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   });
   const matchesByDateRef = useRef<Record<string, Match[]>>({});
 
-  // Connected Creators State (persisted in localStorage)
+  // Connected Creators State (persisted in localStorage, official @futfield creator always connected)
   const [connectedCreators, setConnectedCreators] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('futfield_connected_creators');
-      return saved ? JSON.parse(saved) : ['@emirates_gunner', '@tactical_scout'];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter((h: string) => h.toLowerCase() !== '@tactical_scout');
+          if (!cleaned.some((h: string) => isCreatorTarget(h))) {
+            cleaned.unshift(CREATOR_HANDLE);
+          }
+          return cleaned;
+        }
+      }
+      return [CREATOR_HANDLE, '@emirates_gunner'];
     } catch {
-      return ['@emirates_gunner', '@tactical_scout'];
+      return [CREATOR_HANDLE, '@emirates_gunner'];
     }
   });
 
@@ -975,6 +1016,14 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     haptics.like();
     setConnectedCreators(prev => {
       const isConnected = prev.includes(handle);
+      if (isConnected && isCreatorTarget(handle) && !isCreatorEmail(user.email)) {
+        addNotification({
+          title: 'Official Creator Locked 🔒',
+          body: 'You cannot unfollow or disconnect from the official Futfield Creator account.',
+          type: 'system',
+        });
+        return prev;
+      }
       const updated = isConnected ? prev.filter(h => h !== handle) : [...prev, handle];
       try {
         localStorage.setItem('futfield_connected_creators', JSON.stringify(updated));
@@ -984,7 +1033,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addFanPoints(2, 'Connected with Creator');
         addNotification({
           title: `Connected with ${userDetails?.name || handle}! 🤝`,
-          body: `You will now receive tactical match breakdowns and posts from ${userDetails?.name || handle} first in your feed!`,
+          body: `You will now receive match breakdowns and posts from ${userDetails?.name || handle} first in your feed!`,
           type: 'like',
         });
       }
@@ -1493,9 +1542,15 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const updateUser = (fields: Partial<UserProfile>) => {
     setUser(prev => {
-      const updated = { ...prev, ...fields };
-      syncUserProfile(updated).catch(() => {});
-      return updated;
+      const nextEmail = fields.email ?? prev.email;
+      const isCreator = isCreatorEmail(nextEmail);
+      const merged = { ...prev, ...fields };
+      if (!isCreator) {
+        merged.name = sanitizeNonCreatorName(merged.name, nextEmail);
+        merged.handle = sanitizeNonCreatorHandle(merged.handle, nextEmail);
+      }
+      syncUserProfile(merged).catch(() => {});
+      return merged;
     });
   };
 
@@ -2262,7 +2317,6 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     activeMatchRoom ||
     shareModalPayload ||
     pricingModalOpen ||
-    playerScoutModalOpen ||
     notificationsModalOpen ||
     searchModalOpen ||
     monetizationModalOpen ||
@@ -2298,10 +2352,6 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setMonetizationModalOpen(false);
       return;
     }
-    if (playerScoutModalOpen) {
-      setPlayerScoutModalOpen(false);
-      return;
-    }
     if (notificationsModalOpen) {
       setNotificationsModalOpen(false);
       return;
@@ -2318,7 +2368,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setAuthModalOpen(false);
       return;
     }
-    // 2. Allow active tab sub-view to intercept Back (e.g. PitchReels Dedicated Video, Menu subpage)
+    // 2. Allow active tab sub-view to intercept Back (e.g. Futfield Tube Dedicated Video, Menu subpage)
     if (subBackHandlerRef.current && subBackHandlerRef.current()) {
       return;
     }
@@ -2520,8 +2570,9 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setShowWelcome,
         showClubSelection,
         setShowClubSelection,
-        playerScoutModalOpen,
-        setPlayerScoutModalOpen,
+        menuDedicatedPage,
+        setMenuDedicatedPage,
+        openHubFeature,
         fetchLiveMatches,
         matchesLoading,
         connectedCreators,

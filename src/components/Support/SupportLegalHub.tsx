@@ -75,7 +75,7 @@ export const SupportLegalHub: React.FC = () => {
 
   // Resource Center state
   const [resourceSearch, setResourceSearch] = useState('');
-  const [expandedGuideId, setExpandedGuideId] = useState<string | null>('res_pitchreels');
+  const [expandedGuideId, setExpandedGuideId] = useState<string | null>('res_futfield_tube');
 
   // Contact Support Form state
   const [contactName, setContactName] = useState(user.name || '');
@@ -143,17 +143,17 @@ export const SupportLegalHub: React.FC = () => {
   const faqItems: FAQItem[] = [
     {
       id: 'faq_uploads',
-      category: 'Media & PitchReels',
+      category: 'Media & Futfield Tube',
       question: 'How do image and video uploads process on the backend?',
       answer:
-        'Every image and PitchReel uploaded through FUTFIELD streams as binary bytes directly to /api/media/upload on our backend server. While uploading, you see the Uploading splash screen until the server verifies format, duration, and copyright rules and confirms UPLOADED.',
+        'Every image and clip uploaded through FUTFIELD streams as binary bytes directly to /api/media/upload on our backend server. While uploading, you see the Uploading status until MediaGuard verifies format, duration, and copyright rules and confirms UPLOADED.',
     },
     {
       id: 'faq_scores',
       category: 'Live Scores',
       question: 'Why do live match fixtures update instantaneously?',
       answer:
-        'FUTFIELD uses a fast dual-layer fixture engine with non-blocking timeout protection and instant offline cache fallback, so tapping the Scores tab renders fixtures immediately while syncing live FotMob updates in the background.',
+        'FUTFIELD uses a fast dual-layer fixture engine with non-blocking timeout protection and instant offline cache fallback, so tapping the Scores tab renders fixtures immediately while syncing live matchday updates in the background.',
     },
     {
       id: 'faq_rivalry',
@@ -167,14 +167,14 @@ export const SupportLegalHub: React.FC = () => {
       category: 'Paystack Billing',
       question: 'How do Paystack Pro Passes, cancellations, and refunds work?',
       answer:
-        'You can choose Matchday Pro ($12 / 1 month), Club VIP ($25 / 3 months), or Championship Season ($36 / 5 months). Paystack automatically converts currency based on region. Duplicate or erroneous charges reported within 48 hours via Contact Support or futfieldsport@gmail.com are refunded in 3-5 business days.',
+        'You can choose Matchday Pro ($12 USD / 1 month), Club VIP ($25 USD / 3 months), or Championship Season ($36 USD / 5 months). Paystack automatically converts your local currency based on your IP location while USD rates remain fixed. Duplicate charges reported within 48 hours via Contact Support or futfieldsport@gmail.com are refunded in 3-5 business days.',
     },
     {
       id: 'faq_points',
       category: 'Fan Points & Badges',
       question: 'How do I unlock the Verified Blue Check and earn Fan Points?',
       answer:
-        'Earn +20 FP for publishing a PitchReel video, +10 FP for a match post, +30 FP for exporting a Studio thumbnail, and +5 FP for interacting with fans. Reaching 500 FP unlocks your Verified Fan milestone badge.',
+        'Earn +20 FP for publishing a Futfield Tube clip or Quick Kick, +10 FP for a match post, +30 FP for exporting a Studio thumbnail, and +5 FP for interacting with fans. Reaching 500 FP unlocks your Verified Fan milestone badge.',
     },
   ];
 
@@ -190,19 +190,19 @@ export const SupportLegalHub: React.FC = () => {
 
   const resourceGuides: ResourceGuide[] = [
     {
-      id: 'res_pitchreels',
+      id: 'res_futfield_tube',
       category: 'Creator Guide',
       readTime: '4 min read',
-      title: 'PitchReels 9:16 Shorts, 16:9 Videos & Sound Sync Guide',
+      title: 'Futfield Tube 9:16 Quick Kicks, 16:9 Clips & Sound Sync Guide',
       summary:
-        'Best practices for publishing 9:16 vertical shorts (≤ 2m) and 16:9 football highlights (≤ 3m) with MediaGuard copyright checks.',
+        'Best practices for publishing 9:16 vertical Quick Kicks (≤ 60s) and 16:9 football clips with MediaGuard copyright checks.',
       steps: [
-        'Use the Post Composer on Home or the PitchReels upload flow to pick a photo or football clip.',
-        'Watch the dedicated Uploading splash modal while binary bytes stream directly to the backend /api/media/upload endpoint.',
-        'Wait for the UPLOADED confirmation—MediaGuard scans copyright & format rules on the backend automatically.',
-        'Your content immediately goes live in Home or PitchReels for fans worldwide.',
+        'Use the Post Composer on Home or the Futfield Tube upload flow to pick a photo or football clip.',
+        'Watch the upload status bar while binary bytes stream directly to the backend /api/media/upload endpoint.',
+        'Wait for UPLOADED confirmation—MediaGuard scans copyright & format rules on the backend automatically.',
+        'Your content immediately goes live in Home or Futfield Tube for fans worldwide.',
       ],
-      actionLabel: 'Open PitchReels',
+      actionLabel: 'Open Futfield Tube',
       actionTab: 'videos',
     },
     {
@@ -690,7 +690,7 @@ export const SupportLegalHub: React.FC = () => {
                 type="text"
                 value={resourceSearch}
                 onChange={e => setResourceSearch(e.target.value)}
-                placeholder="Filter resources (PitchReels, Match Room, Paystack, Privacy)..."
+                placeholder="Filter resources (Futfield Tube, Match Room, Paystack, Privacy)..."
                 className="w-full min-h-[44px] pl-10 pr-3 py-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-[#00E676]"
               />
             </div>
@@ -1080,7 +1080,7 @@ export const SupportLegalHub: React.FC = () => {
               2. Media Uploads & Backend Storage Telemetry
             </h3>
             <p>
-              Images and PitchReel videos you upload are streamed directly to our backend media storage service (/api/media/upload). We measure exact file byte sizes solely to calculate image and video MB totals, enforce fair quotas, and display live engagement analytics (views, likes, reactions, shares).
+              Images and Futfield Tube videos you upload are streamed directly to our backend media storage service (/api/media/upload). We measure exact file byte sizes solely to calculate image and video MB totals, enforce fair quotas, and display live engagement analytics (watches, cheers, reactions, shares).
             </p>
           </section>
 
@@ -1151,31 +1151,31 @@ export const SupportLegalHub: React.FC = () => {
               1. Acceptance of Terms
             </h3>
             <p>
-              By accessing FUTFIELD&apos;s live match centers, PitchReels video hub, Creator Studio, tactical tools, or Fan Communities on or after {todayFull}, you agree to be bound by these Terms of Use and our Privacy Policy.
+              By accessing FUTFIELD&apos;s live match centers, Futfield Tube &amp; Quick Kicks hub, Creator Studio, or Fan Communities on or after {todayFull}, you agree to be bound by these Terms of Use and our Privacy Policy.
             </p>
           </section>
 
           <section className="space-y-1.5">
             <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wide">
-              2. Account Responsibilities & Fair Access
+              2. Account Responsibilities &amp; Fair Access
             </h3>
             <p>
-              You are responsible for safeguarding your login credentials and ensuring accurate profile details. Free accounts include daily posting, PitchReel upload, and match room messaging allowances; Pro Pass plans unlock expanded limits.
+              You are responsible for safeguarding your login credentials and ensuring accurate profile details. Free accounts include daily posting, Futfield Tube upload, and match room messaging allowances; Pro Pass plans unlock expanded limits.
             </p>
           </section>
 
           <section className="space-y-1.5">
             <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wide">
-              3. User Content & Licensing
+              3. User Content &amp; Licensing
             </h3>
             <p>
-              You retain ownership of original football photos, tactical commentary, and videos you upload. By publishing on FUTFIELD, you grant us a non-exclusive license to host, transcode, display, and count engagement metrics across the platform.
+              You retain ownership of original football photos, tactical commentary, and videos you upload. By publishing on FUTFIELD, you grant us a non-exclusive license to host, stream, display, and count engagement metrics across the platform.
             </p>
           </section>
 
           <section className="space-y-1.5">
             <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wide">
-              4. Prohibited Conduct & Anti-Abuse
+              4. Prohibited Conduct &amp; Anti-Abuse
             </h3>
             <p>
               Hate speech, racial slurs, targeted harassment, automated spam, unauthorized copyright rebroadcasting, and impersonation are strictly prohibited and subject to immediate suspension.
@@ -1184,10 +1184,19 @@ export const SupportLegalHub: React.FC = () => {
 
           <section className="space-y-1.5">
             <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wide">
-              5. Live Match Data & Availability
+              5. Live Match Data &amp; Availability
             </h3>
             <p>
               Live scores, standings, and statistics are provided for informational and community engagement purposes. While we engineer real-time synchronization and offline caching for speed, FUTFIELD is not liable for third-party feed delays.
+            </p>
+          </section>
+
+          <section className="space-y-1.5">
+            <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wide">
+              6. Google Play Intellectual Property, Non-Affiliation &amp; DMCA Policy
+            </h3>
+            <p>
+              FUTFIELD is an independent football fan community platform and is not affiliated with, endorsed by, or sponsored by FIFA, UEFA, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, or any third-party club or broadcaster. All club emblems displayed on the platform are original geometric heraldic shields generated solely for team identification. Uploaded videos are screened by MediaGuard against protected broadcast rights. To submit a DMCA or copyright takedown notice, email {SUPPORT_EMAIL}.
             </p>
           </section>
 

@@ -23,14 +23,14 @@ import {
 import confetti from 'canvas-confetti';
 import { useFootball } from '../../context/FootballContext';
 import {
-  getUserCountry,
+  fetchBackendGeoPricing,
+  formatLocalPriceFromUsd,
   UserCountryData,
   FREE_TIER_ALLOWANCE_SUMMARY,
   PRO_SUBSCRIPTION_PLANS,
   startPaystackSubscription,
   verifyAndActivatePro,
   cancelProSubscription,
-  getExchangeRates,
   checkPaystackKeyStatus,
 } from '../../services/paystack';
 import { haptics } from '../../utils/haptics';
@@ -52,7 +52,8 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
     country_name: 'Nigeria',
     currency: 'NGN',
   });
-  const [preferredCurrency, setPreferredCurrency] = useState<'NGN' | 'USD'>('NGN');
+  const [detectedLocalCurrency, setDetectedLocalCurrency] = useState<string>('NGN');
+  const [preferredCurrency, setPreferredCurrency] = useState<string>('NGN');
   const [billingEmail, setBillingEmail] = useState<string>(user.email || 'futfieldsport@gmail.com');
   const [loadingCountry, setLoadingCountry] = useState(true);
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({ NGN: 1600, USD: 1 });
@@ -91,18 +92,22 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
     };
   }, [user.id]);
 
-  // Detect user country and fetch live exchange rates & Paystack live key status
+  // Detect user country via free backend IP lookup + live FX while keeping USD fixed
   useEffect(() => {
     let mounted = true;
-    getUserCountry().then((data) => {
-      if (mounted) {
-        setCountryData(data);
-        setPreferredCurrency(data.country_code === 'NG' ? 'NGN' : 'USD');
-        setLoadingCountry(false);
-      }
-    });
-    getExchangeRates().then((rates) => {
-      if (mounted && rates) setExchangeRates(rates);
+    fetchBackendGeoPricing().then((geo) => {
+      if (!mounted) return;
+      const cur = (geo.currency || 'NGN').toUpperCase();
+      setCountryData({
+        country_code: (geo.country_code || 'NG').toUpperCase(),
+        country_name: geo.country_name || 'Nigeria',
+        currency: cur,
+        city: geo.city,
+      });
+      setDetectedLocalCurrency(cur);
+      setPreferredCurrency(cur);
+      if (geo.rates) setExchangeRates(geo.rates);
+      setLoadingCountry(false);
     });
     checkPaystackKeyStatus().then((status) => {
       if (mounted) setPaystackStatus(status);
@@ -112,24 +117,14 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
     };
   }, []);
 
+  const getLocalCurrencyPrice = (usdPrice: number, targetCurrency: string) => {
+    const code = (targetCurrency || 'USD').toUpperCase();
+    const rate = Number(exchangeRates[code] || (code === 'NGN' ? 1600 : 1));
+    return formatLocalPriceFromUsd(usdPrice, code, rate);
+  };
+
   const formatPlanPrice = (plan: typeof PRO_SUBSCRIPTION_PLANS[0]) => {
-    if (preferredCurrency === 'NGN') {
-      return plan.ngnFormatted;
-    }
-    const localCur = countryData.currency || 'USD';
-    if (localCur === 'EUR') {
-      const rate = exchangeRates.EUR || 0.92;
-      return `€${(plan.usdPrice * rate).toFixed(2)}`;
-    }
-    if (localCur === 'GBP') {
-      const rate = exchangeRates.GBP || 0.78;
-      return `£${(plan.usdPrice * rate).toFixed(2)}`;
-    }
-    if (localCur === 'CAD') {
-      const rate = exchangeRates.CAD || 1.35;
-      return `CA$${(plan.usdPrice * rate).toFixed(2)}`;
-    }
-    return `$${plan.usdPrice}`;
+    return getLocalCurrencyPrice(plan.usdPrice, preferredCurrency);
   };
 
   const applyUnlockedUpgrade = (params: {
@@ -204,7 +199,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
     await startPaystackSubscription({
       email: cleanEmail,
       userId: user.id || 'user_guest',
-      country: preferredCurrency === 'NGN' ? 'NG' : countryData.country_code === 'NG' ? 'US' : countryData.country_code,
+      country: preferredCurrency === 'NGN' ? 'NG' : countryData.country_code || 'US',
       preferredCurrency,
       planType,
       checkoutMode,
@@ -318,7 +313,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
               </span>
             ) : (
               <span className="tabular-nums">
-                Region: <strong className="text-emerald-700 dark:text-[#00E676]">{countryData.country_name} ({countryData.country_code})</strong>
+                Detected: <strong className="text-emerald-700 dark:text-[#00E676]">{countryData.city ? `${countryData.city}, ` : ''}{countryData.country_name} ({countryData.country_code}) · {detectedLocalCurrency}</strong>
               </span>
             )}
           </span>
@@ -361,7 +356,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
             <div className="p-2.5 rounded-2xl bg-white dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/8 space-y-1">
               <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500 dark:text-white/60">
                 <Video className="w-3 h-3 text-blue-500" />
-                <span>PitchReels</span>
+                <span>Quick Kicks</span>
               </div>
               <div className="font-mono tabular-nums font-black text-slate-900 dark:text-white text-[11px]">
                 {dailyUsage.videos}/{dailyUsage.limits.video} Free
@@ -526,19 +521,34 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                 <span>Billing &amp; Paystack Receipt Email</span>
               </label>
 
-              {/* Currency Switcher */}
-              <div className="inline-flex p-0.5 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-[11px] font-bold self-start sm:self-auto">
-                <button
-                  type="button"
-                  onClick={() => setPreferredCurrency('NGN')}
-                  className={`px-2.5 py-1 rounded-lg transition-all ${
-                    preferredCurrency === 'NGN'
-                      ? 'bg-[#00E676] text-black shadow-sm'
-                      : 'text-slate-600 dark:text-white/65'
-                  }`}
-                >
-                  🇳🇬 NGN (₦)
-                </button>
+              {/* Dynamic IP Local Currency vs Stagnant USD Switcher */}
+              <div className="inline-flex flex-wrap p-0.5 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-[11px] font-bold self-start sm:self-auto gap-0.5">
+                {detectedLocalCurrency !== 'USD' && (
+                  <button
+                    type="button"
+                    onClick={() => setPreferredCurrency(detectedLocalCurrency)}
+                    className={`px-2.5 py-1 rounded-lg transition-all ${
+                      preferredCurrency === detectedLocalCurrency
+                        ? 'bg-[#00E676] text-black shadow-sm'
+                        : 'text-slate-600 dark:text-white/65'
+                    }`}
+                  >
+                    📍 {detectedLocalCurrency}
+                  </button>
+                )}
+                {detectedLocalCurrency !== 'NGN' && (
+                  <button
+                    type="button"
+                    onClick={() => setPreferredCurrency('NGN')}
+                    className={`px-2.5 py-1 rounded-lg transition-all ${
+                      preferredCurrency === 'NGN'
+                        ? 'bg-[#00E676] text-black shadow-sm'
+                        : 'text-slate-600 dark:text-white/65'
+                    }`}
+                  >
+                    🇳🇬 NGN
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setPreferredCurrency('USD')}
@@ -548,7 +558,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                       : 'text-slate-600 dark:text-white/65'
                   }`}
                 >
-                  🌍 USD ($)
+                  💵 USD ($) Fixed
                 </button>
               </div>
             </div>
@@ -601,9 +611,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                       </span>
 
                       <div className="text-xs font-bold text-slate-500 dark:text-white/60 tabular-nums">
-                        {preferredCurrency === 'NGN'
-                          ? `${plan.ngnFormatted} · $${plan.usdPrice}`
-                          : `$${plan.usdPrice} USD · ${plan.ngnFormatted}`}
+                        USD Base: ${plan.usdPrice} (Fixed)
                       </div>
                     </div>
 
@@ -624,14 +632,14 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                       </p>
                     </div>
 
-                    <div className="flex items-baseline gap-2 pt-2 border-t border-slate-100 dark:border-white/8">
+                    <div className="flex flex-wrap items-baseline gap-2 pt-2 border-t border-slate-100 dark:border-white/8">
                       <span className="text-2xl font-black font-mono tabular-nums tracking-tight text-slate-900 dark:text-white">
-                        {preferredCurrency === 'NGN' ? plan.ngnFormatted : `$${plan.usdPrice} USD`}
+                        {formatPlanPrice(plan)}
                       </span>
                       <span className="text-xs font-bold text-slate-500 dark:text-white/55 tabular-nums">
-                        {preferredCurrency === 'NGN'
-                          ? `($${plan.usdPrice} USD) / ${plan.billingInterval}`
-                          : `≈ ${formatPlanPrice(plan)} / ${plan.billingInterval}`}
+                        {preferredCurrency === 'USD'
+                          ? `Fixed $${plan.usdPrice} USD · ≈ ${getLocalCurrencyPrice(plan.usdPrice, detectedLocalCurrency === 'USD' ? 'NGN' : detectedLocalCurrency)} / ${plan.billingInterval}`
+                          : `Stagnant $${plan.usdPrice} USD Base / ${plan.billingInterval}`}
                       </span>
                     </div>
 
@@ -680,7 +688,7 @@ export const SubscriptionPage: React.FC<SubscriptionPageProps> = ({
                           <>
                             <CreditCard className="w-4 h-4" />
                             <span className="tabular-nums">
-                              Pay {preferredCurrency === 'NGN' ? plan.ngnFormatted : `$${plan.usdPrice} USD`} via Paystack
+                              Pay {formatPlanPrice(plan)} (${plan.usdPrice} USD) via Paystack
                             </span>
                             <ArrowRight className="w-3.5 h-3.5" />
                           </>

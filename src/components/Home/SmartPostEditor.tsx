@@ -20,10 +20,6 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
-import yamalActionImg from '../../assets/images/football_yamal_barca_action_1793565483066.jpg';
-import haalandActionImg from '../../assets/images/football_haaland_city_action_1793565357245.jpg';
-import viniciusActionImg from '../../assets/images/football_vinicius_madrid_action_1793565356644.jpg';
-import stadiumAtmosphereImg from '../../assets/images/football_stadium_atmosphere_1793565356976.jpg';
 
 interface SmartPostEditorProps {
   onClose?: () => void;
@@ -70,12 +66,10 @@ export const SmartPostEditor: React.FC<SmartPostEditorProps> = ({
   const [aiResult, setAiResult] = useState<AiEnhanceResult | null>(null);
   const [hasEnhanced, setHasEnhanced] = useState(false);
 
-  // Available Match Action Photos
+  // Available Match Action Graphics (Copyright-Safe Original FUTFIELD Media)
   const samplePhotos = [
-    { label: 'Yamal Strike', url: yamalActionImg },
-    { label: 'Haaland Celebration', url: haalandActionImg },
-    { label: 'Vinicius Attack', url: viniciusActionImg },
-    { label: 'Cathedral Stadium', url: stadiumAtmosphereImg },
+    { label: 'Matchday Pitch', url: '/og-image.jpg' },
+    { label: 'Futfield Crest', url: '/futfield-logo.jpg' },
   ];
 
   const toneOptions: { id: ToneType; label: string; icon: string; desc: string }[] = [
@@ -168,7 +162,7 @@ export const SmartPostEditor: React.FC<SmartPostEditorProps> = ({
         setAiResult(data);
         setDraft(data.enhancedText);
         setHasEnhanced(true);
-        addFanPoints(20, 'Enhanced with Smart Football AI');
+        addFanPoints(20, 'Enhanced Post Tone & Phrasing');
       } else {
         throw new Error('Fallback needed');
       }

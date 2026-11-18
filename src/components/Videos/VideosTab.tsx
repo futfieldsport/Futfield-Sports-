@@ -13,6 +13,7 @@ import {
   Flame,
   FolderPlus,
   Gauge,
+  ListVideo,
   Maximize2,
   MessageCircle,
   Minimize2,
@@ -24,23 +25,20 @@ import {
   Search,
   Send,
   Share2,
-  Subtitles,
   ThumbsDown,
-  Trash2,
   Volume2,
   VolumeX,
+  X,
   Zap,
 } from 'lucide-react';
 import { useFootball, normalizeVideoItem } from '../../context/FootballContext';
 import {
-  FutubeCaptionCue,
   FutubeShout,
   MatchdayPack,
   VideoItem,
 } from '../../types/football';
 import {
   cheerFutubeShout,
-  fetchFutubeCaptions,
   fetchFutubeShouts,
   fetchFutubeVideoDetail,
   fetchFutubeVideos,
@@ -56,7 +54,7 @@ import {
   toggleFutubeCheerOnServer,
   toggleFutubeConnect,
 } from '../../services/supabaseClient';
-import { buildShareUrl, downloadVideoFile } from '../../utils/share';
+import { buildVideoShareUrl, downloadVideoFile } from '../../utils/share';
 import { haptics } from '../../utils/haptics';
 import { FutfieldTubeLogo, playCrowdCheerSound } from './FutfieldTubeLogo';
 import { FanZoneProfileView } from './FanZoneProfileView';
@@ -124,7 +122,7 @@ export const VideosTab: React.FC = () => {
     openTubeUpload,
     openQuickKicks,
     openShareSheet,
-    deleteVideo,
+    setActiveTab,
     addFanPoints,
     addNotification,
     registerBackHandler,
@@ -153,8 +151,10 @@ export const VideosTab: React.FC = () => {
   const [upNextVideos, setUpNextVideos] = useState<VideoItem[]>([]);
   const [autoplayNext, setAutoplayNext] = useState<boolean>(true);
   const [descExpanded, setDescExpanded] = useState<boolean>(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [watchDrawer, setWatchDrawer] = useState<
+    null | 'shouts' | 'upnext' | 'livechat' | 'pack' | 'report'
+  >(null);
 
   // Player controls state (Watch Page) — sound strictly ON by default
   const watchVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -173,10 +173,6 @@ export const VideosTab: React.FC = () => {
   const lastTapRef = useRef<{ time: number; side: 'left' | 'right' }>({ time: 0, side: 'right' });
   const watchTouchStartYRef = useRef<number | null>(null);
 
-  // Auto-captions (English + Pidgin)
-  const [captions, setCaptions] = useState<FutubeCaptionCue[]>([]);
-  const [captionMode, setCaptionMode] = useState<'off' | 'english' | 'pidgin'>('english');
-
   // 5-second genuine watch counter tracking
   const accumulatedPlayRef = useRef<number>(0);
   const lastTickRef = useRef<number>(0);
@@ -192,11 +188,9 @@ export const VideosTab: React.FC = () => {
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
   const shoutInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Matchday Packs & Report inline drawers
-  const [showPackPicker, setShowPackPicker] = useState<boolean>(false);
+  // Matchday Packs drawer state
   const [packs, setPacks] = useState<MatchdayPack[]>([]);
   const [newPackName, setNewPackName] = useState<string>('Weekend Bangers');
-  const [showReportBox, setShowReportBox] = useState<boolean>(false);
 
   // Squad-only Match Live Chat state
   const [liveChatMessages, setLiveChatMessages] = useState<
@@ -204,7 +198,6 @@ export const VideosTab: React.FC = () => {
   >([]);
   const [liveChatIsSquad, setLiveChatIsSquad] = useState<boolean>(false);
   const [liveChatInput, setLiveChatInput] = useState<string>('');
-  const [showMatchLiveChat, setShowMatchLiveChat] = useState<boolean>(false);
 
   // Quick Kicks vertical feed state
   const [quickKickIndex, setQuickKickIndex] = useState<number>(0);
@@ -225,6 +218,10 @@ export const VideosTab: React.FC = () => {
         setShoutsDrawerVideo(null);
         return true;
       }
+      if (watchDrawer) {
+        setWatchDrawer(null);
+        return true;
+      }
       if (tubeSubView !== 'feed') {
         setTubeSubView('feed');
         return true;
@@ -233,7 +230,7 @@ export const VideosTab: React.FC = () => {
     };
     registerBackHandler(handler);
     return () => registerBackHandler(null);
-  }, [tubeSubView, shoutsDrawerVideo, registerBackHandler, setTubeSubView]);
+  }, [tubeSubView, shoutsDrawerVideo, watchDrawer, registerBackHandler, setTubeSubView]);
 
   // Trigger screen-wide 🔥 Cheer animation burst
   const triggerCheerBurst = useCallback(() => {
@@ -359,7 +356,7 @@ export const VideosTab: React.FC = () => {
 
   const activeQuickKick = quickKicksList[quickKickIndex] || quickKicksList[0] || null;
 
-  // Load Watch detail, Up Next, Shouts, Captions & Squad Live Chat when watching a clip
+  // Load Watch detail, Up Next, Shouts & Squad Live Chat when watching a clip
   useEffect(() => {
     if (tubeSubView !== 'watch' || !activeWatchVideo?.id) return;
     const targetId = activeWatchVideo.id;
@@ -367,9 +364,7 @@ export const VideosTab: React.FC = () => {
     lastTickRef.current = 0;
     setCurrentTime(0);
     setDescExpanded(false);
-    setShowPackPicker(false);
-    setShowReportBox(false);
-    setConfirmDeleteId(null);
+    setWatchDrawer(null);
 
     fetchFutubeVideoDetail(targetId, user.id).then((res) => {
       if (res.video) {
@@ -380,10 +375,6 @@ export const VideosTab: React.FC = () => {
       } else {
         setUpNextVideos(allKnownVideos.filter((v) => v.id !== targetId).slice(0, 8));
       }
-    });
-
-    fetchFutubeCaptions(targetId).then((cues) => {
-      setCaptions(Array.isArray(cues) ? cues : []);
     });
 
     fetchLiveMatchChat(targetId, user.id).then((chat) => {
@@ -548,6 +539,24 @@ export const VideosTab: React.FC = () => {
     haptics.like();
     const handle = clip.fanzoneHandle || clip.creator?.handle || clip.userId || '@fanzone';
     const res = await toggleFutubeConnect(user.id, handle);
+    if (res.blocked) {
+      setLiveChatIsSquad(true);
+      patchVideoEverywhere(clip.id, {
+        squadCount: res.squadCount,
+        alertEnabled: res.alertEnabled,
+        creator: {
+          ...clip.creator,
+          isSubscribed: true,
+          subscribers: `${res.squadCount} Squad`,
+        },
+      });
+      addNotification({
+        title: 'Official Creator Protected 🔒',
+        body: res.error || 'Every account automatically follows the official Futfield Creator account.',
+        type: 'system',
+      });
+      return;
+    }
     if (res.success) {
       setLiveChatIsSquad(res.isConnected);
       patchVideoEverywhere(clip.id, {
@@ -594,8 +603,18 @@ export const VideosTab: React.FC = () => {
     }
   };
 
-  // Download video file (real binary download)
+  // Download video file (Pro users only)
   const handleDownloadClip = async (clip: VideoItem) => {
+    if (!isProUser) {
+      haptics.light();
+      addNotification({
+        title: 'Pro Users Only',
+        body: 'Upgrade to Futfield Pro to download clips directly to your device.',
+        type: 'system',
+      });
+      setPricingModalOpen(true);
+      return;
+    }
     if (!clip.videoUrl || downloadingId) return;
     setDownloadingId(clip.id);
     haptics.light();
@@ -621,22 +640,9 @@ export const VideosTab: React.FC = () => {
     }
   };
 
-  // Delete video (inline Confirm/Cancel — no window.confirm)
-  const handleConfirmDelete = async (clipId: string) => {
-    setConfirmDeleteId(null);
-    await deleteVideo(clipId);
-    setFeedVideos((prev) => prev.filter((v) => v.id !== clipId));
-    setUpNextVideos((prev) => prev.filter((v) => v.id !== clipId));
-    if (tubeSubView === 'watch') {
-      setTubeSubView('feed');
-    } else if (tubeSubView === 'kicks') {
-      setQuickKickIndex((i) => Math.max(0, i - 1));
-    }
-  };
-
   // Save to Matchday Pack
   const handleOpenPackPicker = async () => {
-    setShowPackPicker((v) => !v);
+    setWatchDrawer((prev) => (prev === 'pack' ? null : 'pack'));
     const list = await fetchMatchdayPacks(user.id);
     setPacks(Array.isArray(list) ? list : []);
   };
@@ -652,7 +658,7 @@ export const VideosTab: React.FC = () => {
           ? prev.map((p) => (p.id === res.pack.id ? res.pack : p))
           : [res.pack, ...prev];
       });
-      setShowPackPicker(false);
+      setWatchDrawer(null);
       addNotification({
         title: 'Saved to Matchday Pack',
         body: `Added to "${packName.trim()}".`,
@@ -789,13 +795,6 @@ export const VideosTab: React.FC = () => {
     } catch {}
   };
 
-  // Current live subtitle cue (EN or Pidgin)
-  const activeCaptionCue = useMemo(() => {
-    if (captionMode === 'off' || captions.length === 0) return null;
-    const t = tubeSubView === 'kicks' ? quickKickTime : currentTime;
-    return captions.find((c) => t >= c.startSec && t <= c.endSec) || captions[0];
-  }, [captionMode, captions, tubeSubView, quickKickTime, currentTime]);
-
   // ==============================================================
   // FLOATING SCREEN-WIDE CHEER 🔥 BURST OVERLAY
   // ==============================================================
@@ -902,7 +901,7 @@ export const VideosTab: React.FC = () => {
     const fanzoneName = kick.fanzoneName || kick.creator?.name || 'FanZone';
     const fanzoneHandle = kick.fanzoneHandle || kick.creator?.handle || '@fanzone';
     const fanzoneAvatar =
-      kick.fanzoneAvatar || kick.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
+      kick.fanzoneAvatar || kick.creator?.avatar || '/futfield-logo.jpg';
     const isConnected = Boolean(kick.creator?.isSubscribed);
 
     const goNextKick = () => {
@@ -920,7 +919,7 @@ export const VideosTab: React.FC = () => {
 
     return (
       <div
-        className="fixed inset-0 z-40 bg-black flex items-center justify-center overflow-hidden select-none"
+        className="fixed inset-0 z-50 bg-black flex items-center justify-center overflow-hidden select-none"
         onTouchStart={(e) => {
           kickTouchStartYRef.current = e.touches[0]?.clientY ?? null;
         }}
@@ -936,8 +935,8 @@ export const VideosTab: React.FC = () => {
       >
         {renderCheerBurstOverlay()}
 
-        {/* Vertical 9:16 Stage */}
-        <div className="relative w-full h-full max-w-[480px] mx-auto bg-black flex items-center justify-center">
+        {/* Full-Screen Vertical Stage */}
+        <div className="relative w-full h-full bg-black flex items-center justify-center">
           <video
             ref={quickKickVideoRef}
             key={kick.id}
@@ -946,6 +945,7 @@ export const VideosTab: React.FC = () => {
             autoPlay
             loop
             playsInline
+            preload="auto"
             muted={quickKickMuted}
             onClick={() => {
               const el = quickKickVideoRef.current;
@@ -965,7 +965,7 @@ export const VideosTab: React.FC = () => {
               setQuickKickTime(el.currentTime);
               handlePlaybackTimeTick(kick.id, kickPlaySecondsRef, kickLastTickRef, el.paused);
             }}
-            className="w-full h-full object-contain bg-black"
+            className="w-full h-full object-contain bg-black transform-gpu"
           />
 
           {/* Subtle Left Exit Pill (Zero action clutter on top!) */}
@@ -991,17 +991,6 @@ export const VideosTab: React.FC = () => {
           {kick.hasWatermark && (
             <div className="pointer-events-none absolute bottom-32 left-4 px-2.5 py-0.5 rounded-md bg-black/50 text-white/75 text-[10px] font-black tracking-widest border border-white/15">
               FUTFIELD
-            </div>
-          )}
-
-          {/* Live CC Subtitle Strip (English / Pidgin) */}
-          {captionMode !== 'off' && (
-            <div className="pointer-events-none absolute bottom-28 left-4 right-20">
-              <div className="inline-block px-3 py-1 rounded-xl bg-black/75 text-white text-xs font-bold leading-snug">
-                {captionMode === 'pidgin'
-                  ? '⚽ Chale see better football skill! Make everybody cheer 🔥'
-                  : `⚽ ${kick.title} — Pure matchday highlight!`}
-              </div>
             </div>
           )}
 
@@ -1140,7 +1129,7 @@ export const VideosTab: React.FC = () => {
                   targetId: kick.id,
                   title: kick.title,
                   text: `Watch "${kick.title}" Quick Kick on Futfield Tube!`,
-                  url: buildShareUrl(`/tube/watch/${encodeURIComponent(kick.id)}`),
+                  url: buildVideoShareUrl(kick.id),
                   previewImage: kick.thumbnailUrl,
                   videoUrl: kick.videoUrl,
                 })
@@ -1195,59 +1184,20 @@ export const VideosTab: React.FC = () => {
               <span className="text-[10px] font-bold text-[#00C853]">Crowd</span>
             </button>
 
-            {/* Caption Language Cycle (EN / Pidgin / Off) */}
-            <button
-              type="button"
-              onClick={() =>
-                setCaptionMode((m) => (m === 'english' ? 'pidgin' : m === 'pidgin' ? 'off' : 'english'))
-              }
-              className="flex flex-col items-center gap-0.5"
-              title="Captions (English / Pidgin)"
-            >
-              <div className="w-10 h-10 rounded-full bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center">
-                <Subtitles className="w-4 h-4" />
-              </div>
-              <span className="text-[9px] font-bold uppercase">{captionMode}</span>
-            </button>
-
-            {/* Download */}
+            {/* Download (Pro Users Only) */}
             <button
               type="button"
               onClick={() => handleDownloadClip(kick)}
-              className="w-10 h-10 rounded-full bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center"
-              title="Download Clip"
+              className="relative w-10 h-10 rounded-full bg-black/55 backdrop-blur-md border border-white/15 flex items-center justify-center"
+              title={isProUser ? 'Download Clip' : 'Download Clip (Pro Only)'}
             >
               <Download className="w-4 h-4" />
+              {!isProUser && (
+                <span className="absolute -top-1 -right-1 px-1 py-0.2 rounded-full bg-amber-400 text-black text-[8px] font-black leading-tight">
+                  PRO
+                </span>
+              )}
             </button>
-
-            {/* Delete Clip (Inline Confirm) */}
-            {confirmDeleteId === kick.id ? (
-              <div className="flex flex-col gap-1 items-center bg-black/85 p-1.5 rounded-xl border border-white/20">
-                <button
-                  type="button"
-                  onClick={() => handleConfirmDelete(kick.id)}
-                  className="px-2 py-1 rounded-lg bg-[#00C853] text-black font-black text-[10px]"
-                >
-                  Confirm
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteId(null)}
-                  className="px-2 py-1 rounded-lg bg-white/15 text-white text-[10px]"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmDeleteId(kick.id)}
-                className="w-10 h-10 rounded-full bg-black/55 backdrop-blur-md border border-white/15 text-white/80 hover:text-amber-300 flex items-center justify-center"
-                title="Delete Quick Kick"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
           </div>
         </div>
 
@@ -1264,14 +1214,14 @@ export const VideosTab: React.FC = () => {
   }
 
   // ==============================================================
-  // SUB-VIEW 4: /tube/watch/:id — WATCH PAGE (CUSTOM HTML5 PLAYER)
+  // SUB-VIEW 4: /tube/watch/:id — FULL SCREEN CUSTOM HTML5 PLAYER
   // ==============================================================
   if (tubeSubView === 'watch' && activeWatchVideo) {
     const clip = activeWatchVideo;
     const fanzoneName = clip.fanzoneName || clip.creator?.name || 'FanZone Creator';
     const fanzoneHandle = clip.fanzoneHandle || clip.creator?.handle || '@fanzone';
     const fanzoneAvatar =
-      clip.fanzoneAvatar || clip.creator?.avatar || '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
+      clip.fanzoneAvatar || clip.creator?.avatar || '/futfield-logo.jpg';
     const isConnected = Boolean(clip.creator?.isSubscribed);
     const watchesCount = Number(clip.watches ?? clip.views ?? 0);
     const cheersCount = Number(clip.cheers ?? clip.likes ?? 0);
@@ -1279,16 +1229,16 @@ export const VideosTab: React.FC = () => {
 
     return (
       <div
-        className="pb-24 max-w-6xl mx-auto px-2.5 sm:px-4 pt-2 space-y-4"
+        ref={playerContainerRef}
+        className="fixed inset-0 z-50 bg-black flex flex-col overflow-hidden select-none"
         onTouchStart={(e) => {
           watchTouchStartYRef.current = e.touches[0]?.clientY ?? null;
         }}
         onTouchEnd={(e) => {
           const startY = watchTouchStartYRef.current;
           watchTouchStartYRef.current = null;
-          if (startY === null) return;
+          if (startY === null || watchDrawer) return;
           const endY = e.changedTouches[0]?.clientY ?? startY;
-          // Mobile swipe up cleanly jumps into Quick Kicks mode
           if (startY - endY > 95 && window.innerWidth < 768) {
             openQuickKicks();
           }
@@ -1296,486 +1246,786 @@ export const VideosTab: React.FC = () => {
       >
         {renderCheerBurstOverlay()}
 
-        {/* Watch Top Bar */}
-        <div className="flex items-center justify-between gap-2">
+        {/* Full-Screen Video Stage (Zero cropping, zero shaking, sound ON by default) */}
+        <div
+          onClick={handleWatchSurfaceTap}
+          className="relative flex-1 w-full h-full bg-black flex items-center justify-center cursor-pointer"
+        >
+          <video
+            ref={watchVideoRef}
+            key={clip.id}
+            src={clip.videoUrl}
+            poster={clip.thumbnailUrl || undefined}
+            playsInline
+            autoPlay
+            preload="auto"
+            muted={isMuted}
+            onLoadedMetadata={(e) => {
+              const el = e.currentTarget;
+              setDurationSec(el.duration || clip.durationSeconds || 0);
+              el.muted = isMuted;
+              el.volume = isMuted ? 0 : volume;
+              el.playbackRate = playbackSpeed;
+            }}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onTimeUpdate={(e) => {
+              const el = e.currentTarget;
+              setCurrentTime(el.currentTime);
+              handlePlaybackTimeTick(
+                clip.id,
+                accumulatedPlayRef,
+                lastTickRef,
+                el.paused
+              );
+            }}
+            onEnded={() => {
+              if (autoplayNext && upNextVideos.length > 0) {
+                handleOpenWatch(upNextVideos[0]);
+              }
+            }}
+            className="w-full h-full object-contain bg-black transform-gpu"
+          />
+
+          {/* Center Play Badge when paused */}
+          {!isPlaying && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25">
+              <div className="w-16 h-16 rounded-full bg-[#00C853] text-black flex items-center justify-center shadow-2xl">
+                <Play className="w-8 h-8 fill-black ml-1" />
+              </div>
+            </div>
+          )}
+
+          {/* Double-Tap Seek Feedback (-10s / +10s) */}
+          {seekOverlay && (
+            <div
+              className={`pointer-events-none absolute top-1/2 -translate-y-1/2 px-4 py-2 rounded-full bg-black/75 text-[#00C853] font-black text-sm ${
+                seekOverlay === 'back' ? 'left-6' : 'right-6'
+              }`}
+            >
+              {seekOverlay === 'back' ? '<< -10s' : '+10s >>'}
+            </div>
+          )}
+        </div>
+
+        {/* Minimal Top-Left Navigation Pill Only (Zero top-right action clutter) */}
+        <div className="absolute top-3.5 left-3 z-20 flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setTubeSubView('feed')}
-            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 text-xs font-bold text-slate-800 dark:text-white flex items-center gap-1.5 hover:border-[#00C853]"
+            onClick={(e) => {
+              e.stopPropagation();
+              setTubeSubView('feed');
+            }}
+            className="min-h-[38px] px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/15 text-xs font-extrabold text-white flex items-center gap-1.5 hover:border-[#00C853]"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Futfield Tube</span>
           </button>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => openQuickKicks()}
-              className="min-h-[36px] px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10 text-slate-800 dark:text-white text-xs font-extrabold flex items-center gap-1"
-            >
-              <Zap className="w-3.5 h-3.5 text-[#00C853]" />
-              <span>Quick Kicks</span>
-            </button>
-            <button
-              type="button"
-              onClick={openTubeUpload}
-              className="min-h-[36px] px-3.5 py-1 rounded-full bg-[#00C853] text-black text-xs font-black flex items-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Upload Clip</span>
-            </button>
-          </div>
+          {clip.isMatchLive && (
+            <span className="px-2.5 py-1 rounded-full bg-[#00C853] text-black text-[10px] font-black flex items-center gap-1">
+              <Radio className="w-3 h-3 animate-pulse" />
+              <span>MATCH LIVE</span>
+            </span>
+          )}
+
+          {clip.hasWatermark && (
+            <span className="px-2.5 py-1 rounded-full bg-black/55 text-white/80 text-[10px] font-black tracking-widest border border-white/15">
+              FUTFIELD
+            </span>
+          )}
         </div>
 
-        {/* Main 2-Column Watch Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
-          {/* LEFT 2/3: PLAYER + INFO + SHOUTS */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Custom HTML5 Player (NO iframe, Sound ON by default, Stadium Green #00C853) */}
-            <div
-              ref={playerContainerRef}
-              className="relative rounded-2xl overflow-hidden bg-black border border-slate-800 shadow-2xl"
+        {/* STRICT RIGHT-SIDE ACTION RAIL */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute right-2.5 bottom-28 sm:bottom-24 z-20 flex flex-col items-center gap-2.5 text-white max-h-[72vh] overflow-y-auto no-scrollbar py-1"
+        >
+          {/* FanZone Avatar + Connect ⚡ */}
+          <div className="relative flex flex-col items-center">
+            <img
+              src={fanzoneAvatar}
+              alt={fanzoneName}
+              onClick={() => openFanZone(fanzoneHandle)}
+              className="w-11 h-11 rounded-full object-cover border-2 border-[#00C853] cursor-pointer shadow-lg"
+            />
+            <button
+              type="button"
+              onClick={() => handleToggleConnect(clip)}
+              className={`-mt-2.5 px-2 py-0.5 rounded-full text-[10px] font-black shadow ${
+                isConnected ? 'bg-white text-black' : 'bg-[#00C853] text-black'
+              }`}
+              title={isConnected ? 'Connected' : 'Connect to FanZone'}
             >
-              <div
-                onClick={handleWatchSurfaceTap}
-                className="relative aspect-video w-full bg-black flex items-center justify-center cursor-pointer"
+              {isConnected ? '✓' : '⚡'}
+            </button>
+          </div>
+
+          {/* Cheer 🔥 */}
+          <button
+            type="button"
+            onClick={() => handleCheer(clip)}
+            className="flex flex-col items-center gap-0.5"
+            title="Cheer"
+          >
+            <div
+              className={`w-11 h-11 rounded-full flex items-center justify-center backdrop-blur-md border transition-transform active:scale-90 ${
+                clip.hasCheered
+                  ? 'bg-[#00C853] text-black border-[#00C853]'
+                  : 'bg-black/60 text-white border-white/15'
+              }`}
+            >
+              <Flame className="w-5 h-5" />
+            </div>
+            <span className="text-[11px] font-extrabold font-mono drop-shadow">
+              {formatCompact(cheersCount)}
+            </span>
+          </button>
+
+          {/* Boo 👎 */}
+          <button
+            type="button"
+            onClick={() => handleBoo(clip)}
+            className="flex flex-col items-center gap-0.5"
+            title="Boo"
+          >
+            <div
+              className={`w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md border ${
+                clip.hasBooed
+                  ? 'bg-amber-400 text-black border-amber-400'
+                  : 'bg-black/60 text-white border-white/15'
+              }`}
+            >
+              <ThumbsDown className="w-4 h-4" />
+            </div>
+            {boosCount > 0 && (
+              <span className="text-[10px] font-mono font-bold drop-shadow">{boosCount}</span>
+            )}
+          </button>
+
+          {/* Shout 💬 (Comments Drawer) */}
+          <button
+            type="button"
+            onClick={() => setWatchDrawer((prev) => (prev === 'shouts' ? null : 'shouts'))}
+            className="flex flex-col items-center gap-0.5"
+            title="Shouts"
+          >
+            <div className="w-11 h-11 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center">
+              <MessageCircle className="w-5 h-5" />
+            </div>
+            <span className="text-[11px] font-extrabold font-mono drop-shadow">
+              {formatCompact(shouts.length || clip.shoutsCount || clip.commentsCount || 0)}
+            </span>
+          </button>
+
+          {/* Share */}
+          <button
+            type="button"
+            onClick={() =>
+              openShareSheet({
+                kind: 'video',
+                targetId: clip.id,
+                title: clip.title,
+                text: `Watch "${clip.title}" on Futfield Tube!`,
+                url: buildVideoShareUrl(clip.id),
+                previewImage: clip.thumbnailUrl,
+                videoUrl: clip.videoUrl,
+              })
+            }
+            className="flex flex-col items-center gap-0.5"
+            title="Share Clip"
+          >
+            <div className="w-11 h-11 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center">
+              <Share2 className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] font-bold drop-shadow">Share</span>
+          </button>
+
+          {/* Sound Toggle (ON by default) */}
+          <button
+            type="button"
+            onClick={() => {
+              const nextMuted = !isMuted;
+              setIsMuted(nextMuted);
+              if (watchVideoRef.current) {
+                watchVideoRef.current.muted = nextMuted;
+                if (!nextMuted) watchVideoRef.current.volume = volume || 1;
+              }
+            }}
+            className="flex flex-col items-center gap-0.5"
+            title="Toggle Sound"
+          >
+            <div className="w-11 h-11 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center">
+              {isMuted ? (
+                <VolumeX className="w-5 h-5 text-amber-400" />
+              ) : (
+                <Volume2 className="w-5 h-5 text-[#00C853]" />
+              )}
+            </div>
+            <span className="text-[10px] font-bold drop-shadow">{isMuted ? 'Muted' : 'Sound'}</span>
+          </button>
+
+          {/* Download (Pro Users Only) */}
+          <button
+            type="button"
+            onClick={() => handleDownloadClip(clip)}
+            disabled={downloadingId === clip.id}
+            className="relative flex flex-col items-center gap-0.5"
+            title={isProUser ? 'Download Clip' : 'Pro Users Only'}
+          >
+            <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center">
+              <Download className="w-4 h-4" />
+            </div>
+            {!isProUser && (
+              <span className="absolute -top-1 -right-1 px-1 py-0.2 rounded-full bg-amber-400 text-black text-[8px] font-black leading-tight">
+                PRO
+              </span>
+            )}
+          </button>
+
+          {/* Save to Matchday Pack */}
+          <button
+            type="button"
+            onClick={handleOpenPackPicker}
+            className="flex flex-col items-center gap-0.5"
+            title="Save to Matchday Pack"
+          >
+            <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center">
+              <FolderPlus className="w-4 h-4 text-[#00C853]" />
+            </div>
+          </button>
+
+          {/* Up Next Playlist */}
+          <button
+            type="button"
+            onClick={() => setWatchDrawer((prev) => (prev === 'upnext' ? null : 'upnext'))}
+            className="flex flex-col items-center gap-0.5"
+            title="Up Next Clips"
+          >
+            <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center">
+              <ListVideo className="w-4 h-4" />
+            </div>
+            <span className="text-[9px] font-bold drop-shadow">Up Next</span>
+          </button>
+
+          {/* Report / Options */}
+          <button
+            type="button"
+            onClick={() => setWatchDrawer((prev) => (prev === 'report' ? null : 'report'))}
+            className="w-9 h-9 rounded-full bg-black/60 backdrop-blur-md border border-white/15 flex items-center justify-center text-white/80"
+            title="Clip Options & Report"
+          >
+            <Flag className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* BOTTOM FULL-SCREEN INFO + SCRUB CONTROLS */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/95 via-black/75 to-transparent pt-10 pb-3.5 px-3.5 pr-16 sm:pr-20 space-y-2 text-white"
+        >
+          {/* FanZone + Alert + Live Chat Row */}
+          <div className="flex items-center flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => openFanZone(fanzoneHandle)}
+              className="font-display font-black text-sm text-white hover:text-[#00C853] truncate"
+            >
+              {fanzoneName}
+            </button>
+            <span className="text-[11px] font-mono text-[#00C853] font-bold">
+              {formatCompact(watchesCount)} Watches · {formatRelativeTime(clip.createdAt)}
+            </span>
+            <button
+              type="button"
+              onClick={() => handleToggleAlert(clip)}
+              className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 border ${
+                clip.alertEnabled
+                  ? 'bg-[#00C853]/20 border-[#00C853] text-[#00C853]'
+                  : 'bg-white/10 border-white/15 text-white/80'
+              }`}
+              title="FanZone Alerts"
+            >
+              {clip.alertEnabled ? <Bell className="w-3 h-3 fill-current" /> : <BellOff className="w-3 h-3" />}
+              <span>{clip.alertEnabled ? 'Alert On' : 'Alert'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setWatchDrawer((prev) => (prev === 'livechat' ? null : 'livechat'))}
+              className="px-2 py-0.5 rounded-full bg-white/10 border border-white/15 text-[10px] font-bold text-white flex items-center gap-1"
+            >
+              <Radio className="w-3 h-3 text-[#00C853]" />
+              <span>Squad Chat ({liveChatMessages.length})</span>
+            </button>
+          </div>
+
+          {/* Full Title + Expandable Description */}
+          <div className="space-y-1">
+            <h1 className="font-display font-black text-sm sm:text-base text-white leading-snug line-clamp-2">
+              {clip.title}
+            </h1>
+            {descExpanded && (
+              <p className="text-xs text-white/80 leading-relaxed whitespace-pre-line">
+                {clip.description || 'Original football clip on Futfield Tube.'}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {(clip.hashtags || ['#FutfieldTube']).slice(0, 4).map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery(tag.replace(/^#/, ''));
+                    setTubeSubView('feed');
+                  }}
+                  className="text-[11px] font-bold text-[#00C853] hover:underline"
+                >
+                  {tag.startsWith('#') ? tag : `#${tag}`}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setDescExpanded((v) => !v)}
+                className="text-[11px] font-extrabold text-white/75 hover:text-white"
               >
-                <video
-                  ref={watchVideoRef}
-                  key={clip.id}
-                  src={clip.videoUrl}
-                  poster={clip.thumbnailUrl || undefined}
-                  playsInline
-                  autoPlay
-                  muted={isMuted}
-                  onLoadedMetadata={(e) => {
-                    const el = e.currentTarget;
-                    setDurationSec(el.duration || clip.durationSeconds || 0);
-                    el.muted = isMuted;
-                    el.volume = isMuted ? 0 : volume;
-                    el.playbackRate = playbackSpeed;
-                  }}
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  onTimeUpdate={(e) => {
-                    const el = e.currentTarget;
-                    setCurrentTime(el.currentTime);
-                    handlePlaybackTimeTick(
-                      clip.id,
-                      accumulatedPlayRef,
-                      lastTickRef,
-                      el.paused
-                    );
-                  }}
-                  onEnded={() => {
-                    if (autoplayNext && upNextVideos.length > 0) {
-                      handleOpenWatch(upNextVideos[0]);
-                    }
-                  }}
-                  className="w-full h-full object-contain"
-                />
+                {descExpanded ? 'Show less' : 'More info'}
+              </button>
+            </div>
+          </div>
 
-                {/* Center Play Badge when paused */}
-                {!isPlaying && (
-                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25">
-                    <div className="w-16 h-16 rounded-full bg-[#00C853] text-black flex items-center justify-center shadow-2xl">
-                      <Play className="w-8 h-8 fill-black ml-1" />
-                    </div>
-                  </div>
-                )}
+          {/* Scrub Bar + Playback Controls */}
+          <div className="space-y-1.5 pt-0.5">
+            <input
+              type="range"
+              min={0}
+              max={durationSec || 1}
+              step={0.1}
+              value={currentTime}
+              onChange={(e) => {
+                const t = Number(e.target.value);
+                if (watchVideoRef.current) watchVideoRef.current.currentTime = t;
+                setCurrentTime(t);
+              }}
+              className="w-full h-1.5 bg-white/25 rounded-lg appearance-none cursor-pointer accent-[#00C853]"
+            />
 
-                {/* Double-Tap Seek Feedback (-10s / +10s) */}
-                {seekOverlay && (
-                  <div
-                    className={`pointer-events-none absolute top-1/2 -translate-y-1/2 px-4 py-2 rounded-full bg-black/75 text-[#00C853] font-black text-sm ${
-                      seekOverlay === 'back' ? 'left-6' : 'right-6'
-                    }`}
-                  >
-                    {seekOverlay === 'back' ? '<< -10s' : '+10s >>'}
-                  </div>
-                )}
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleWatchPlayPause}
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-[#00C853]"
+                  title={isPlaying ? 'Pause' : 'Play'}
+                >
+                  {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
+                </button>
 
-                {/* Free User Watermark Overlay */}
-                {clip.hasWatermark && (
-                  <div className="pointer-events-none absolute top-3 right-3 px-2.5 py-0.5 rounded bg-black/55 text-white/80 text-[10px] font-black tracking-widest border border-white/15">
-                    FUTFIELD
-                  </div>
-                )}
-
-                {/* Match Live Badge */}
-                {clip.isMatchLive && (
-                  <div className="pointer-events-none absolute top-3 left-3 px-2.5 py-1 rounded-full bg-[#00C853] text-black text-[10px] font-black flex items-center gap-1">
-                    <Radio className="w-3 h-3 animate-pulse" />
-                    <span>MATCH LIVE</span>
-                  </div>
-                )}
-
-                {/* Auto-Caption Overlay (English + Pidgin) */}
-                {activeCaptionCue && captionMode !== 'off' && (
-                  <div className="pointer-events-none absolute bottom-3 left-4 right-4 text-center">
-                    <span className="inline-block px-3 py-1 rounded-lg bg-black/80 text-white text-xs sm:text-sm font-bold shadow">
-                      {captionMode === 'pidgin'
-                        ? activeCaptionCue.pidgin
-                        : activeCaptionCue.english}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Custom Bottom Control Bar */}
-              <div className="px-3 py-2 bg-[#090D12] border-t border-white/10 space-y-1.5 text-white">
                 <input
                   type="range"
                   min={0}
-                  max={durationSec || 1}
-                  step={0.1}
-                  value={currentTime}
+                  max={1}
+                  step={0.05}
+                  value={isMuted ? 0 : volume}
                   onChange={(e) => {
-                    const t = Number(e.target.value);
-                    if (watchVideoRef.current) watchVideoRef.current.currentTime = t;
-                    setCurrentTime(t);
+                    const v = Number(e.target.value);
+                    setVolume(v);
+                    setIsMuted(v === 0);
+                    if (watchVideoRef.current) {
+                      watchVideoRef.current.volume = v;
+                      watchVideoRef.current.muted = v === 0;
+                    }
                   }}
-                  className="w-full h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#00C853]"
+                  className="w-16 hidden sm:block h-1 bg-white/25 rounded-lg appearance-none cursor-pointer accent-[#00C853]"
                 />
 
-                <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={toggleWatchPlayPause}
-                      className="p-1.5 rounded-lg hover:bg-white/10 text-[#00C853]"
-                      title={isPlaying ? 'Pause' : 'Play'}
-                    >
-                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
-                    </button>
+                <span className="font-mono text-[11px] text-white/80">
+                  {formatMediaTime(currentTime)} / {formatMediaTime(durationSec)}
+                </span>
+              </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextMuted = !isMuted;
-                        setIsMuted(nextMuted);
-                        if (watchVideoRef.current) watchVideoRef.current.muted = nextMuted;
-                      }}
-                      className="p-1.5 rounded-lg hover:bg-white/10"
-                      title="Toggle Sound"
-                    >
-                      {isMuted ? (
-                        <VolumeX className="w-4 h-4 text-amber-400" />
-                      ) : (
-                        <Volume2 className="w-4 h-4 text-[#00C853]" />
-                      )}
-                    </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = playbackSpeed === 1 ? 1.5 : playbackSpeed === 1.5 ? 2 : 1;
+                    setPlaybackSpeed(next);
+                    if (watchVideoRef.current) watchVideoRef.current.playbackRate = next;
+                  }}
+                  className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-mono font-bold flex items-center gap-1"
+                  title="Playback Speed"
+                >
+                  <Gauge className="w-3 h-3 text-[#00C853]" />
+                  <span>{playbackSpeed}x</span>
+                </button>
 
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={isMuted ? 0 : volume}
-                      onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setVolume(v);
-                        setIsMuted(v === 0);
-                        if (watchVideoRef.current) {
-                          watchVideoRef.current.volume = v;
-                          watchVideoRef.current.muted = v === 0;
-                        }
-                      }}
-                      className="w-16 hidden sm:block h-1 bg-white/25 rounded-lg appearance-none cursor-pointer accent-[#00C853]"
-                    />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (qualityPref === '720p' && !isProUser) {
+                      setPricingModalOpen(true);
+                      return;
+                    }
+                    setQualityPref((q) => (q === '1080p' ? '720p' : '1080p'));
+                  }}
+                  className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-mono font-bold text-[#00C853]"
+                  title="Video Quality"
+                >
+                  {qualityPref}
+                </button>
 
-                    <span className="font-mono text-[11px] text-white/75">
-                      {formatMediaTime(currentTime)} / {formatMediaTime(durationSec)}
-                    </span>
-                  </div>
+                <button
+                  type="button"
+                  onClick={handleTogglePiP}
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20"
+                  title="Picture-in-Picture"
+                >
+                  <PictureInPicture2 className="w-4 h-4" />
+                </button>
 
-                  <div className="flex items-center gap-1.5">
-                    {/* Auto-Captions EN / Pidgin */}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCaptionMode((m) =>
-                          m === 'english' ? 'pidgin' : m === 'pidgin' ? 'off' : 'english'
-                        )
-                      }
-                      className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border ${
-                        captionMode === 'off'
-                          ? 'border-white/15 text-white/60'
-                          : 'border-[#00C853]/60 bg-[#00C853]/15 text-[#00C853]'
-                      }`}
-                      title="Auto-Captions (English / Pidgin)"
-                    >
-                      <Subtitles className="w-3.5 h-3.5" />
-                      <span>
-                        {captionMode === 'english'
-                          ? 'CC: EN'
-                          : captionMode === 'pidgin'
-                          ? 'CC: Pidgin'
-                          : 'CC: Off'}
-                      </span>
-                    </button>
-
-                    {/* Speed Selector 1x / 1.5x / 2x */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = playbackSpeed === 1 ? 1.5 : playbackSpeed === 1.5 ? 2 : 1;
-                        setPlaybackSpeed(next);
-                        if (watchVideoRef.current) watchVideoRef.current.playbackRate = next;
-                      }}
-                      className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-mono font-bold flex items-center gap-1"
-                      title="Playback Speed"
-                    >
-                      <Gauge className="w-3 h-3 text-[#00C853]" />
-                      <span>{playbackSpeed}x</span>
-                    </button>
-
-                    {/* Quality Selector 720p / 1080p */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (qualityPref === '720p' && !isProUser) {
-                          setPricingModalOpen(true);
-                          return;
-                        }
-                        setQualityPref((q) => (q === '1080p' ? '720p' : '1080p'));
-                      }}
-                      className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-mono font-bold text-[#00C853]"
-                      title="Video Quality"
-                    >
-                      {qualityPref}
-                    </button>
-
-                    {/* Picture-in-Picture */}
-                    <button
-                      type="button"
-                      onClick={handleTogglePiP}
-                      className="p-1.5 rounded-lg hover:bg-white/10"
-                      title="Picture-in-Picture"
-                    >
-                      <PictureInPicture2 className="w-4 h-4" />
-                    </button>
-
-                    {/* Fullscreen */}
-                    <button
-                      type="button"
-                      onClick={handleToggleFullscreen}
-                      className="p-1.5 rounded-lg hover:bg-white/10"
-                      title="Fullscreen"
-                    >
-                      {isFullscreen ? (
-                        <Minimize2 className="w-4 h-4" />
-                      ) : (
-                        <Maximize2 className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleToggleFullscreen}
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20"
+                  title="Browser Fullscreen"
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="w-4 h-4" />
+                  ) : (
+                    <Maximize2 className="w-4 h-4" />
+                  )}
+                </button>
               </div>
             </div>
+          </div>
+        </div>
 
-            {/* Title, Watches, & FanZone Bar */}
-            <div className="space-y-3">
-              <div>
-                <h1 className="font-display font-black text-base sm:text-xl text-slate-900 dark:text-white leading-snug">
-                  {clip.title}
-                </h1>
-                <p className="text-xs text-slate-500 dark:text-white/60 font-medium mt-1">
-                  {formatCompact(watchesCount)} Watches · {formatRelativeTime(clip.createdAt)} ·{' '}
-                  <span className="text-[#00C853] font-bold">
-                    {clip.tubeCategory || 'Goals'}
-                  </span>
-                  {clip.boostFirst60 && (
-                    <span className="ml-2 px-2 py-0.5 rounded-full bg-[#00C853]/15 text-[#00C853] text-[10px] font-black">
-                      60s Goal Boost ⚡
-                    </span>
+        {/* FULL-SCREEN OVERLAY DRAWERS (Shouts, Up Next, Live Chat, Pack, Report) */}
+        {watchDrawer && (
+          <div
+            onClick={() => setWatchDrawer(null)}
+            className="absolute inset-0 z-30 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-lg max-h-[78vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-[#10161E] border border-white/15 text-white p-4 space-y-4 shadow-2xl"
+            >
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+                <h3 className="font-display font-black text-sm text-white">
+                  {watchDrawer === 'shouts'
+                    ? `Shouts (${shouts.length})`
+                    : watchDrawer === 'upnext'
+                    ? 'Up Next'
+                    : watchDrawer === 'livechat'
+                    ? `Squad Match Live Chat (${liveChatMessages.length})`
+                    : watchDrawer === 'pack'
+                    ? 'Save to Matchday Pack'
+                    : 'Clip Options & Report'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setWatchDrawer(null)}
+                  className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Drawer Body: SHOUTS */}
+              {watchDrawer === 'shouts' && (
+                <div className="space-y-3.5">
+                  <div className="flex items-center gap-1 p-1 rounded-full bg-white/5 w-fit">
+                    {(['newest', 'top_cheers'] as const).map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setShoutSort(s)}
+                        className={`px-3 py-1 rounded-full text-[11px] font-bold ${
+                          shoutSort === s ? 'bg-[#00C853] text-black font-extrabold' : 'text-white/70'
+                        }`}
+                      >
+                        {s === 'newest' ? 'Newest' : 'Top Cheers 🔥'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {showEmojiPicker && (
+                    <div className="flex items-center gap-1.5 flex-wrap p-2 rounded-xl bg-black/40 border border-white/10">
+                      {QUICK_FOOTBALL_EMOJIS.map((em) => (
+                        <button
+                          key={em}
+                          type="button"
+                          onClick={() => setShoutInput((prev) => `${prev}${em}`)}
+                          className="w-8 h-8 rounded-lg hover:bg-[#00C853]/20 text-base flex items-center justify-center"
+                        >
+                          {em}
+                        </button>
+                      ))}
+                    </div>
                   )}
-                </p>
-              </div>
 
-              {/* FanZone Row: Avatar + Name + Squad + Connect ⚡ + Alert 🔔 */}
-              <div className="p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 flex flex-wrap items-center justify-between gap-3">
-                <div
-                  onClick={() => openFanZone(fanzoneHandle)}
-                  className="flex items-center gap-3 cursor-pointer min-w-0"
-                >
-                  <img
-                    src={fanzoneAvatar}
-                    alt={fanzoneName}
-                    className="w-11 h-11 rounded-full object-cover border-2 border-[#00C853] shrink-0"
-                  />
-                  <div className="min-w-0">
-                    <div className="font-display font-extrabold text-sm text-slate-900 dark:text-white truncate hover:text-[#00C853]">
-                      {fanzoneName}
-                    </div>
-                    <div className="text-xs font-mono text-slate-500 dark:text-white/55">
-                      {formatCompact(clip.squadCount || 1)} Squad
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleToggleConnect(clip)}
-                    className={`min-h-[40px] px-4 py-1.5 rounded-full text-xs font-black transition-all ${
-                      isConnected
-                        ? 'bg-slate-200 dark:bg-white/15 text-slate-900 dark:text-white'
-                        : 'bg-[#00C853] hover:bg-[#00b248] text-black shadow-md shadow-[#00C853]/25'
-                    }`}
-                  >
-                    {isConnected ? 'Connected ✓' : 'Connect ⚡'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleToggleAlert(clip)}
-                    className={`min-h-[40px] px-3 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1 ${
-                      clip.alertEnabled
-                        ? 'bg-[#00C853]/15 border-[#00C853] text-[#00C853]'
-                        : 'bg-slate-100 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-700 dark:text-white/75'
-                    }`}
-                    title="Alert"
-                  >
-                    {clip.alertEnabled ? (
-                      <Bell className="w-4 h-4 fill-current" />
-                    ) : (
-                      <BellOff className="w-4 h-4" />
+                  <form onSubmit={handleSendShout} className="space-y-1.5">
+                    {replyTarget && (
+                      <div className="flex items-center justify-between text-[11px] px-3 py-1 rounded-lg bg-[#00C853]/15 text-[#00C853] font-bold">
+                        <span>Replying to @{replyTarget.authorName}</span>
+                        <button type="button" onClick={() => setReplyTarget(null)}>
+                          Cancel
+                        </button>
+                      </div>
                     )}
-                    <span className="hidden sm:inline">Alert</span>
-                  </button>
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={user.avatar}
+                        alt={user.name}
+                        className="w-8 h-8 rounded-full object-cover shrink-0"
+                      />
+                      <input
+                        ref={shoutInputRef}
+                        type="text"
+                        value={shoutInput}
+                        onChange={(e) => setShoutInput(e.target.value)}
+                        placeholder="Add a Shout..."
+                        className="flex-1 min-h-[40px] px-3.5 rounded-full bg-black/40 border border-white/15 text-xs text-white focus:outline-none focus:border-[#00C853]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEmojiPicker((v) => !v)}
+                        className="min-h-[40px] px-2.5 rounded-full bg-white/10 text-sm"
+                        title="Football Emoji Picker"
+                      >
+                        🔥
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!shoutInput.trim()}
+                        className="min-h-[40px] px-4 rounded-full bg-[#00C853] text-black font-black text-xs disabled:opacity-45 flex items-center gap-1"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Shout</span>
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                    {shouts.length === 0 ? (
+                      <p className="text-xs text-white/50 text-center py-4">
+                        No Shouts yet — drop the first match reaction!
+                      </p>
+                    ) : (
+                      shouts.map((sh) => (
+                        <div key={sh.id} className="space-y-2">
+                          <div className="flex items-start gap-2.5 text-xs">
+                            <img
+                              src={sh.authorAvatar || fanzoneAvatar}
+                              alt={sh.authorName}
+                              onClick={() => {
+                                setWatchDrawer(null);
+                                openFanZone(sh.authorHandle || sh.authorName);
+                              }}
+                              className="w-8 h-8 rounded-full object-cover cursor-pointer shrink-0"
+                            />
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  onClick={() => {
+                                    setWatchDrawer(null);
+                                    openFanZone(sh.authorHandle || sh.authorName);
+                                  }}
+                                  className="font-bold text-white cursor-pointer hover:text-[#00C853]"
+                                >
+                                  {sh.authorName}
+                                </span>
+                                <span className="text-[10px] text-white/45">
+                                  {formatRelativeTime(sh.createdAt)}
+                                </span>
+                              </div>
+                              <p className="text-white/85 leading-relaxed">{sh.text}</p>
+                              <div className="flex items-center gap-3 pt-0.5 text-[11px]">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCheerShout(sh.id)}
+                                  className={`font-bold flex items-center gap-1 ${
+                                    sh.hasCheered ? 'text-[#00C853]' : 'text-white/60'
+                                  }`}
+                                >
+                                  <span>🔥 {sh.cheers || 0}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReplyTarget({
+                                      parentId: sh.id,
+                                      authorName: sh.authorName,
+                                    });
+                                    shoutInputRef.current?.focus();
+                                  }}
+                                  className="font-bold text-white/60 hover:text-[#00C853]"
+                                >
+                                  Reply
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {sh.replies && sh.replies.length > 0 && (
+                            <div className="pl-10 space-y-2 border-l-2 border-[#00C853]/30 ml-4">
+                              {sh.replies.map((rep) => (
+                                <div key={rep.id} className="flex items-start gap-2 text-xs">
+                                  <CornerDownRight className="w-3.5 h-3.5 text-[#00C853] shrink-0 mt-1" />
+                                  <div className="flex-1 bg-white/[0.05] p-2 rounded-xl">
+                                    <span className="font-bold text-white mr-1.5">
+                                      {rep.authorName}
+                                    </span>
+                                    <span className="text-[10px] text-white/45">
+                                      {formatRelativeTime(rep.createdAt)}
+                                    </span>
+                                    <p className="text-white/80 mt-0.5">{rep.text}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* Action Buttons Bar: Cheer 🔥, Boo 👎, Shout 💬, Share, Download, Save to Matchday Pack, Report, Delete */}
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
-                <button
-                  type="button"
-                  onClick={() => handleCheer(clip)}
-                  className={`min-h-[38px] px-3.5 py-1.5 rounded-full text-xs font-black flex items-center gap-1.5 shrink-0 transition-all ${
-                    clip.hasCheered
-                      ? 'bg-[#00C853] text-black shadow-sm'
-                      : 'bg-slate-100 dark:bg-white/10 text-slate-900 dark:text-white hover:bg-[#00C853]/20'
-                  }`}
-                >
-                  <span>Cheer 🔥</span>
-                  <span className="font-mono">{formatCompact(cheersCount)}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleBoo(clip)}
-                  className={`min-h-[38px] px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1 shrink-0 ${
-                    clip.hasBooed
-                      ? 'bg-amber-500/20 border border-amber-500/50 text-amber-600 dark:text-amber-300'
-                      : 'bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white/80'
-                  }`}
-                >
-                  <ThumbsDown className="w-3.5 h-3.5" />
-                  <span>Boo</span>
-                  {boosCount > 0 && <span className="font-mono">({boosCount})</span>}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => shoutInputRef.current?.focus()}
-                  className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-800 dark:text-white text-xs font-bold flex items-center gap-1.5 shrink-0"
-                >
-                  <MessageCircle className="w-3.5 h-3.5 text-[#00C853]" />
-                  <span>Shout ({shouts.length})</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    openShareSheet({
-                      kind: 'video',
-                      targetId: clip.id,
-                      title: clip.title,
-                      text: `Watch "${clip.title}" on Futfield Tube!`,
-                      url: buildShareUrl(`/tube/watch/${encodeURIComponent(clip.id)}`),
-                      previewImage: clip.thumbnailUrl,
-                      videoUrl: clip.videoUrl,
-                    })
-                  }
-                  className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-800 dark:text-white text-xs font-bold flex items-center gap-1.5 shrink-0"
-                >
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>Share</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDownloadClip(clip)}
-                  disabled={downloadingId === clip.id}
-                  className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-800 dark:text-white text-xs font-bold flex items-center gap-1.5 shrink-0"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>{downloadingId === clip.id ? 'Saving...' : 'Download'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleOpenPackPicker}
-                  className="min-h-[38px] px-3.5 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-800 dark:text-white text-xs font-bold flex items-center gap-1.5 shrink-0"
-                >
-                  <FolderPlus className="w-3.5 h-3.5 text-[#00C853]" />
-                  <span>Save to Matchday Pack</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowReportBox((v) => !v)}
-                  className="min-h-[38px] px-3 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-white/70 text-xs font-bold flex items-center gap-1 shrink-0"
-                >
-                  <Flag className="w-3.5 h-3.5" />
-                  <span>Report</span>
-                </button>
-
-                {confirmDeleteId === clip.id ? (
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleConfirmDelete(clip.id)}
-                      className="min-h-[36px] px-3 rounded-full bg-[#00C853] text-black font-black text-xs"
-                    >
-                      Confirm Delete
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteId(null)}
-                      className="min-h-[36px] px-2.5 rounded-full bg-slate-200 dark:bg-white/15 text-xs font-bold"
-                    >
-                      Cancel
-                    </button>
+              {/* Drawer Body: UP NEXT */}
+              {watchDrawer === 'upnext' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-white/70 font-semibold">Autoplay next highlight</span>
+                    <label className="flex items-center gap-2 font-bold text-[#00C853] cursor-pointer">
+                      <span>{autoplayNext ? 'On' : 'Off'}</span>
+                      <input
+                        type="checkbox"
+                        checked={autoplayNext}
+                        onChange={(e) => setAutoplayNext(e.target.checked)}
+                        className="accent-[#00C853]"
+                      />
+                    </label>
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDeleteId(clip.id)}
-                    className="min-h-[38px] px-3 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white/75 text-xs font-bold flex items-center gap-1 shrink-0"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Matchday Pack Inline Picker */}
-              {showPackPicker && (
-                <div className="p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-[#00C853]/40 space-y-2.5">
-                  <div className="flex items-center justify-between text-xs font-extrabold text-slate-900 dark:text-white">
-                    <span>Save to Matchday Pack</span>
-                    <button type="button" onClick={() => setShowPackPicker(false)} className="text-slate-400">
-                      Close
-                    </button>
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {upNextVideos.map((rel) => (
+                      <div
+                        key={rel.id}
+                        onClick={() => {
+                          setWatchDrawer(null);
+                          handleOpenWatch(rel);
+                        }}
+                        className="flex gap-2.5 p-2 rounded-2xl bg-white/[0.04] border border-white/10 hover:border-[#00C853] cursor-pointer transition-colors"
+                      >
+                        <div className="relative w-32 aspect-video rounded-xl overflow-hidden bg-black shrink-0">
+                          {rel.thumbnailUrl ? (
+                            <img
+                              src={rel.thumbnailUrl}
+                              alt={rel.title}
+                              className="w-full h-full object-contain bg-black"
+                            />
+                          ) : (
+                            <video
+                              src={rel.videoUrl}
+                              muted
+                              playsInline
+                              preload="metadata"
+                              className="w-full h-full object-contain bg-black"
+                            />
+                          )}
+                          <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/80 text-white text-[10px] font-mono font-bold">
+                            {rel.duration}
+                          </span>
+                        </div>
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <h4 className="font-bold text-xs text-white line-clamp-2">
+                            {rel.title}
+                          </h4>
+                          <p className="text-[11px] text-white/55 truncate">
+                            {rel.fanzoneName || rel.creator?.name}
+                          </p>
+                          <p className="text-[10px] font-mono text-white/45">
+                            {formatCompact(rel.watches ?? rel.views ?? 0)} Watches · 🔥{' '}
+                            {formatCompact(rel.cheers ?? rel.likes ?? 0)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
+                </div>
+              )}
+
+              {/* Drawer Body: SQUAD MATCH LIVE CHAT */}
+              {watchDrawer === 'livechat' && (
+                <div className="space-y-3">
+                  {!liveChatIsSquad && !isConnected ? (
+                    <div className="p-3.5 rounded-2xl bg-[#00C853]/10 border border-[#00C853]/30 flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-white">
+                        Connect ⚡ to this FanZone to chat during Match Live!
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleConnect(clip)}
+                        className="px-3.5 py-1.5 rounded-full bg-[#00C853] text-black font-black text-xs shrink-0"
+                      >
+                        Connect ⚡
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                        {liveChatMessages.length === 0 ? (
+                          <p className="text-xs text-white/50 text-center py-3">
+                            No Squad messages yet — start the Match Live banter!
+                          </p>
+                        ) : (
+                          liveChatMessages.map((m) => (
+                            <div key={m.id} className="flex items-start gap-2 text-xs">
+                              <img
+                                src={m.userAvatar || fanzoneAvatar}
+                                alt={m.userName}
+                                className="w-6 h-6 rounded-full object-cover shrink-0"
+                              />
+                              <div>
+                                <span className="font-bold text-[#00C853] mr-1.5">
+                                  {m.userName}:
+                                </span>
+                                <span className="text-white/85">{m.text}</span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <form onSubmit={handleSendLiveSquadChat} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={liveChatInput}
+                          onChange={(e) => setLiveChatInput(e.target.value)}
+                          placeholder="Send a Squad Match Live message..."
+                          className="flex-1 min-h-[40px] px-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white"
+                        />
+                        <button
+                          type="submit"
+                          className="px-4 rounded-xl bg-[#00C853] text-black font-black text-xs"
+                        >
+                          Send
+                        </button>
+                      </form>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Drawer Body: SAVE TO MATCHDAY PACK */}
+              {watchDrawer === 'pack' && (
+                <div className="space-y-3">
                   <div className="flex flex-wrap gap-1.5">
                     {['Weekend Bangers', 'Tactical Gems', 'Best Goals'].map((preset) => (
                       <button
                         key={preset}
                         type="button"
                         onClick={() => handleSaveToPack(preset)}
-                        className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 hover:bg-[#00C853] hover:text-black text-xs font-bold"
+                        className="px-3 py-1.5 rounded-full bg-white/10 hover:bg-[#00C853] hover:text-black text-xs font-bold"
                       >
                         + {preset}
                       </button>
@@ -1785,7 +2035,7 @@ export const VideosTab: React.FC = () => {
                         key={p.id}
                         type="button"
                         onClick={() => handleSaveToPack(p.name)}
-                        className="px-3 py-1.5 rounded-full bg-[#00C853]/15 text-[#00C853] text-xs font-bold"
+                        className="px-3 py-1.5 rounded-full bg-[#00C853]/20 text-[#00C853] text-xs font-bold"
                       >
                         {p.name} ({p.videoIds.length})
                       </button>
@@ -1797,12 +2047,12 @@ export const VideosTab: React.FC = () => {
                       value={newPackName}
                       onChange={(e) => setNewPackName(e.target.value)}
                       placeholder="New Matchday Pack name..."
-                      className="flex-1 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs"
+                      className="flex-1 min-h-[40px] px-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white"
                     />
                     <button
                       type="button"
                       onClick={() => handleSaveToPack(newPackName)}
-                      className="px-4 py-1.5 rounded-xl bg-[#00C853] text-black font-black text-xs"
+                      className="px-4 rounded-xl bg-[#00C853] text-black font-black text-xs"
                     >
                       Save
                     </button>
@@ -1810,371 +2060,53 @@ export const VideosTab: React.FC = () => {
                 </div>
               )}
 
-              {/* Report Inline Picker */}
-              {showReportBox && (
-                <div className="p-3 rounded-2xl bg-white dark:bg-[#12171F] border border-amber-500/40 flex flex-wrap items-center gap-2 text-xs">
-                  <span className="font-bold text-slate-800 dark:text-white">Report Clip:</span>
-                  {['Broadcast Copy', 'Spam', 'Off-topic'].map((reason) => (
+              {/* Drawer Body: REPORT & CONTENT SETTINGS */}
+              {watchDrawer === 'report' && (
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <p className="text-xs font-bold text-white/80">Report Clip:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {['Broadcast Copy', 'Spam', 'Off-topic'].map((reason) => (
+                        <button
+                          key={reason}
+                          type="button"
+                          onClick={async () => {
+                            await reportFutubeVideo(clip.id, user.id, reason);
+                            setWatchDrawer(null);
+                            addNotification({
+                              title: 'Report Submitted',
+                              body: `Thanks — our MediaGuard team will review (${reason}).`,
+                              type: 'system',
+                            });
+                          }}
+                          className="px-3 py-1.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs"
+                        >
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="pt-3 border-t border-white/10">
                     <button
-                      key={reason}
-                      type="button"
-                      onClick={async () => {
-                        await reportFutubeVideo(clip.id, user.id, reason);
-                        setShowReportBox(false);
-                        addNotification({
-                          title: 'Report Submitted',
-                          body: `Thanks — our MediaGuard team will review (${reason}).`,
-                          type: 'system',
-                        });
-                      }}
-                      className="px-3 py-1 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 font-bold"
-                    >
-                      {reason}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* Expandable Description + Clickable #Tags */}
-              <div className="p-3.5 rounded-2xl bg-slate-100/80 dark:bg-white/[0.04] border border-slate-200/80 dark:border-white/8 space-y-2">
-                <p
-                  className={`text-xs text-slate-700 dark:text-white/80 leading-relaxed whitespace-pre-line ${
-                    descExpanded ? '' : 'line-clamp-2'
-                  }`}
-                >
-                  {clip.description || 'Original football clip on Futfield Tube.'}
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  {(clip.hashtags || ['#FutfieldTube']).map((tag) => (
-                    <button
-                      key={tag}
                       type="button"
                       onClick={() => {
-                        setSearchQuery(tag.replace(/^#/, ''));
+                        try {
+                          sessionStorage.setItem('futfield_settings_section', 'content');
+                        } catch {}
+                        setWatchDrawer(null);
                         setTubeSubView('feed');
+                        setActiveTab('settings');
                       }}
-                      className="text-xs font-bold text-[#00C853] hover:underline"
+                      className="w-full min-h-[42px] px-4 rounded-2xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs flex items-center justify-center gap-2"
                     >
-                      {tag.startsWith('#') ? tag : `#${tag}`}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => setDescExpanded((v) => !v)}
-                    className="ml-auto text-xs font-extrabold text-slate-700 dark:text-white"
-                  >
-                    {descExpanded ? 'Show less' : 'Show more'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Squad-Only Live Chat Toggle & Panel */}
-              <div className="rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setShowMatchLiveChat((v) => !v)}
-                  className="w-full px-4 py-3 flex items-center justify-between text-xs font-extrabold text-slate-900 dark:text-white bg-slate-50 dark:bg-black/25"
-                >
-                  <span className="flex items-center gap-2">
-                    <Radio className="w-4 h-4 text-[#00C853]" />
-                    <span>Squad-Only Match Live Chat ({liveChatMessages.length})</span>
-                  </span>
-                  <span className="text-[#00C853]">{showMatchLiveChat ? 'Hide' : 'Open'}</span>
-                </button>
-                {showMatchLiveChat && (
-                  <div className="p-3.5 space-y-3 border-t border-slate-200 dark:border-white/10">
-                    {!liveChatIsSquad && !isConnected ? (
-                      <div className="p-3 rounded-xl bg-[#00C853]/10 border border-[#00C853]/30 flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-slate-800 dark:text-white">
-                          Connect ⚡ to this FanZone to chat during Match Live!
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleConnect(clip)}
-                          className="px-3.5 py-1.5 rounded-full bg-[#00C853] text-black font-black text-xs shrink-0"
-                        >
-                          Connect ⚡
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="max-h-40 overflow-y-auto space-y-2">
-                          {liveChatMessages.length === 0 ? (
-                            <p className="text-xs text-slate-500 dark:text-white/50 text-center py-2">
-                              No Squad messages yet — start the Match Live banter!
-                            </p>
-                          ) : (
-                            liveChatMessages.map((m) => (
-                              <div key={m.id} className="flex items-start gap-2 text-xs">
-                                <img
-                                  src={m.userAvatar || fanzoneAvatar}
-                                  alt={m.userName}
-                                  className="w-6 h-6 rounded-full object-cover shrink-0"
-                                />
-                                <div>
-                                  <span className="font-bold text-[#00C853] mr-1.5">
-                                    {m.userName}:
-                                  </span>
-                                  <span className="text-slate-800 dark:text-white/85">{m.text}</span>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                        <form onSubmit={handleSendLiveSquadChat} className="flex gap-2">
-                          <input
-                            type="text"
-                            value={liveChatInput}
-                            onChange={(e) => setLiveChatInput(e.target.value)}
-                            placeholder="Send a Squad Match Live message..."
-                            className="flex-1 min-h-[38px] px-3 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs"
-                          />
-                          <button
-                            type="submit"
-                            className="px-3.5 rounded-xl bg-[#00C853] text-black font-black text-xs"
-                          >
-                            Send
-                          </button>
-                        </form>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* SHOUT SECTION (Comments with Newest / Top Cheers, Emoji Picker, Nested Replies) */}
-              <div className="p-4 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 space-y-4">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <h3 className="font-display font-black text-sm text-slate-900 dark:text-white">
-                    Shouts ({shouts.length})
-                  </h3>
-                  <div className="flex items-center gap-1 p-1 rounded-full bg-slate-100 dark:bg-white/5">
-                    {(['newest', 'top_cheers'] as const).map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => setShoutSort(s)}
-                        className={`px-3 py-1 rounded-full text-[11px] font-bold ${
-                          shoutSort === s
-                            ? 'bg-[#00C853] text-black font-extrabold'
-                            : 'text-slate-600 dark:text-white/70'
-                        }`}
-                      >
-                        {s === 'newest' ? 'Newest' : 'Top Cheers 🔥'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Football Emoji Bar */}
-                {showEmojiPicker && (
-                  <div className="flex items-center gap-1.5 flex-wrap p-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10">
-                    {QUICK_FOOTBALL_EMOJIS.map((em) => (
-                      <button
-                        key={em}
-                        type="button"
-                        onClick={() => setShoutInput((prev) => `${prev}${em}`)}
-                        className="w-8 h-8 rounded-lg hover:bg-[#00C853]/20 text-base flex items-center justify-center"
-                      >
-                        {em}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Shout Input Form */}
-                <form onSubmit={handleSendShout} className="space-y-1.5">
-                  {replyTarget && (
-                    <div className="flex items-center justify-between text-[11px] px-3 py-1 rounded-lg bg-[#00C853]/15 text-[#00C853] font-bold">
-                      <span>Replying to @{replyTarget.authorName}</span>
-                      <button type="button" onClick={() => setReplyTarget(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <img
-                      src={user.avatar}
-                      alt={user.name}
-                      className="w-8 h-8 rounded-full object-cover shrink-0"
-                    />
-                    <input
-                      ref={shoutInputRef}
-                      type="text"
-                      value={shoutInput}
-                      onChange={(e) => setShoutInput(e.target.value)}
-                      placeholder="Add a Shout..."
-                      className="flex-1 min-h-[40px] px-3.5 rounded-full bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-[#00C853]"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowEmojiPicker((v) => !v)}
-                      className="min-h-[40px] px-2.5 rounded-full bg-slate-100 dark:bg-white/10 text-sm"
-                      title="Football Emoji Picker"
-                    >
-                      🔥
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={!shoutInput.trim()}
-                      className="min-h-[40px] px-4 rounded-full bg-[#00C853] text-black font-black text-xs disabled:opacity-45 flex items-center gap-1"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>Shout</span>
+                      <span>Manage or Delete Uploads in Content Settings</span>
                     </button>
                   </div>
-                </form>
-
-                {/* Shouts List */}
-                <div className="space-y-3.5">
-                  {shouts.length === 0 ? (
-                    <p className="text-xs text-slate-500 dark:text-white/50 text-center py-4">
-                      No Shouts yet — drop the first match reaction!
-                    </p>
-                  ) : (
-                    shouts.map((sh) => (
-                      <div key={sh.id} className="space-y-2">
-                        <div className="flex items-start gap-2.5 text-xs">
-                          <img
-                            src={sh.authorAvatar || fanzoneAvatar}
-                            alt={sh.authorName}
-                            onClick={() => openFanZone(sh.authorHandle || sh.authorName)}
-                            className="w-8 h-8 rounded-full object-cover cursor-pointer shrink-0"
-                          />
-                          <div className="flex-1 min-w-0 space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span
-                                onClick={() => openFanZone(sh.authorHandle || sh.authorName)}
-                                className="font-bold text-slate-900 dark:text-white cursor-pointer hover:text-[#00C853]"
-                              >
-                                {sh.authorName}
-                              </span>
-                              <span className="text-[10px] text-slate-400">
-                                {formatRelativeTime(sh.createdAt)}
-                              </span>
-                            </div>
-                            <p className="text-slate-700 dark:text-white/85 leading-relaxed">
-                              {sh.text}
-                            </p>
-                            <div className="flex items-center gap-3 pt-0.5 text-[11px]">
-                              <button
-                                type="button"
-                                onClick={() => handleCheerShout(sh.id)}
-                                className={`font-bold flex items-center gap-1 ${
-                                  sh.hasCheered
-                                    ? 'text-[#00C853]'
-                                    : 'text-slate-500 dark:text-white/60'
-                                }`}
-                              >
-                                <span>🔥 {sh.cheers || 0}</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setReplyTarget({
-                                    parentId: sh.id,
-                                    authorName: sh.authorName,
-                                  });
-                                  shoutInputRef.current?.focus();
-                                }}
-                                className="font-bold text-slate-500 dark:text-white/60 hover:text-[#00C853]"
-                              >
-                                Reply
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Nested Replies */}
-                        {sh.replies && sh.replies.length > 0 && (
-                          <div className="pl-10 space-y-2 border-l-2 border-[#00C853]/30 ml-4">
-                            {sh.replies.map((rep) => (
-                              <div key={rep.id} className="flex items-start gap-2 text-xs">
-                                <CornerDownRight className="w-3.5 h-3.5 text-[#00C853] shrink-0 mt-1" />
-                                <div className="flex-1 bg-slate-50 dark:bg-white/[0.04] p-2 rounded-xl">
-                                  <span className="font-bold text-slate-900 dark:text-white mr-1.5">
-                                    {rep.authorName}
-                                  </span>
-                                  <span className="text-[10px] text-slate-400">
-                                    {formatRelativeTime(rep.createdAt)}
-                                  </span>
-                                  <p className="text-slate-700 dark:text-white/80 mt-0.5">
-                                    {rep.text}
-                                  </p>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
                 </div>
-              </div>
+              )}
             </div>
           </div>
-
-          {/* RIGHT 1/3: UP NEXT SIDEBAR WITH AUTOPLAY TOGGLE */}
-          <aside className="space-y-3">
-            <div className="flex items-center justify-between px-1">
-              <h3 className="font-display font-black text-sm text-slate-900 dark:text-white">
-                Up Next
-              </h3>
-              <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 dark:text-white/75 cursor-pointer">
-                <span>Autoplay Next</span>
-                <input
-                  type="checkbox"
-                  checked={autoplayNext}
-                  onChange={(e) => setAutoplayNext(e.target.checked)}
-                  className="accent-[#00C853]"
-                />
-              </label>
-            </div>
-
-            <div className="space-y-2.5">
-              {upNextVideos.map((rel) => (
-                <div
-                  key={rel.id}
-                  onClick={() => handleOpenWatch(rel)}
-                  className="flex gap-2.5 p-2 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 hover:border-[#00C853] cursor-pointer transition-all group"
-                >
-                  <div className="relative w-36 aspect-video rounded-xl overflow-hidden bg-black shrink-0">
-                    {rel.thumbnailUrl ? (
-                      <img
-                        src={rel.thumbnailUrl}
-                        alt={rel.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                      />
-                    ) : (
-                      <video
-                        src={`${rel.videoUrl}#t=0.4`}
-                        muted
-                        playsInline
-                        preload="metadata"
-                        className="w-full h-full object-cover"
-                      />
-                    )}
-                    <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/80 text-white text-[10px] font-mono font-bold">
-                      {rel.duration}
-                    </span>
-                  </div>
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white line-clamp-2 group-hover:text-[#00C853]">
-                      {rel.title}
-                    </h4>
-                    <p className="text-[11px] text-slate-500 dark:text-white/55 truncate">
-                      {rel.fanzoneName || rel.creator?.name}
-                    </p>
-                    <p className="text-[10px] font-mono text-slate-400">
-                      {formatCompact(rel.watches ?? rel.views ?? 0)} Watches · 🔥{' '}
-                      {formatCompact(rel.cheers ?? rel.likes ?? 0)}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </aside>
-        </div>
+        )}
       </div>
     );
   }
@@ -2348,32 +2280,32 @@ export const VideosTab: React.FC = () => {
             const fanzoneAvatar =
               clip.fanzoneAvatar ||
               clip.creator?.avatar ||
-              '/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg';
+              '/futfield-logo.jpg';
 
             return (
               <article
                 key={clip.id}
                 className="rounded-2xl overflow-hidden bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 hover:border-[#00C853] transition-all flex flex-col group shadow-sm"
               >
-                {/* 16:9 Thumbnail Cover */}
+                {/* Full-Frame Video/Thumbnail Cover (No cropping, no hover shake) */}
                 <div
                   onClick={() => handleOpenWatch(clip)}
-                  className="relative aspect-video bg-black cursor-pointer overflow-hidden"
+                  className="relative aspect-video bg-black cursor-pointer overflow-hidden flex items-center justify-center"
                 >
                   {clip.thumbnailUrl ? (
                     <img
                       src={clip.thumbnailUrl}
                       alt={clip.title}
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      className="w-full h-full object-contain bg-black transform-gpu"
                     />
                   ) : clip.videoUrl ? (
                     <video
-                      src={`${clip.videoUrl}#t=0.4`}
+                      src={clip.videoUrl}
                       muted
                       playsInline
                       preload="metadata"
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain bg-black transform-gpu"
                     />
                   ) : null}
 
@@ -2411,7 +2343,7 @@ export const VideosTab: React.FC = () => {
                         e.stopPropagation();
                         openFanZone(fanzoneHandle);
                       }}
-                      className="w-9 h-9 rounded-full object-cover border border-[#00C853]/40 shrink-0 cursor-pointer hover:scale-105 transition-transform"
+                      className="w-9 h-9 rounded-full object-cover border border-[#00C853]/40 shrink-0 cursor-pointer"
                     />
                     <div className="flex-1 min-w-0">
                       <h3
@@ -2434,7 +2366,7 @@ export const VideosTab: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Quick Bottom Bar (Cheer, Share, Delete) */}
+                  {/* Quick Bottom Bar (Cheer, Share, Watch Full Screen) */}
                   <div className="pt-2 border-t border-slate-100 dark:border-white/5 flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2">
                       <button
@@ -2457,45 +2389,26 @@ export const VideosTab: React.FC = () => {
                             targetId: clip.id,
                             title: clip.title,
                             text: `Watch "${clip.title}" on Futfield Tube!`,
-                            url: buildShareUrl(`/tube/watch/${encodeURIComponent(clip.id)}`),
+                            url: buildVideoShareUrl(clip.id),
                             previewImage: clip.thumbnailUrl,
                             videoUrl: clip.videoUrl,
                           })
                         }
-                        className="p-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white/75 hover:text-[#00C853]"
+                        className="px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white/80 hover:text-[#00C853] font-bold text-[11px] flex items-center gap-1"
                         title="Share Clip"
                       >
                         <Share2 className="w-3.5 h-3.5" />
+                        <span>Share</span>
                       </button>
                     </div>
 
-                    {confirmDeleteId === clip.id ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmDelete(clip.id)}
-                          className="px-2 py-1 rounded-lg bg-[#00C853] text-black font-black text-[10px]"
-                        >
-                          Confirm
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-white/10 text-[10px]"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteId(clip.id)}
-                        className="p-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-slate-500 dark:text-white/60 hover:text-amber-500"
-                        title="Delete Clip"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenWatch(clip)}
+                      className="px-2.5 py-1 rounded-full bg-[#00C853]/15 text-[#00C853] font-extrabold text-[11px]"
+                    >
+                      Watch
+                    </button>
                   </div>
                 </div>
               </article>

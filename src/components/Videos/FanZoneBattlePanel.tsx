@@ -200,15 +200,15 @@ export const FanZoneBattlePanel: React.FC<FanZoneBattlePanelProps> = ({
                         <img
                           src={side.data.thumbnailUrl}
                           alt={side.data.videoTitle}
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain bg-black transform-gpu"
                         />
                       ) : (
                         <video
-                          src={`${side.data.videoUrl}#t=0.4`}
+                          src={side.data.videoUrl}
                           muted
                           playsInline
                           preload="metadata"
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain bg-black transform-gpu"
                         />
                       )}
                       <span className="absolute top-1.5 left-1.5 px-2 py-0.5 rounded-full bg-black/80 text-white text-[10px] font-bold">

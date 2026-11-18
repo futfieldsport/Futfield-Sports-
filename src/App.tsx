@@ -18,7 +18,6 @@ import { WelcomePage } from './components/Welcome/WelcomePage';
 import { ClubSelectionPage } from './components/Welcome/ClubSelectionPage';
 import { InAppNotificationToast } from './components/Notifications/InAppNotificationToast';
 import { SettingsPage } from './components/Settings/SettingsPage';
-import { PlayerScoutModal } from './components/Players/PlayerScoutModal';
 import { NotificationsModal } from './components/Notifications/NotificationsModal';
 import { CreatorProfileModal } from './components/Profile/CreatorProfileModal';
 import { MonetizationModal } from './components/Monetization/MonetizationModal';
@@ -69,8 +68,6 @@ const AppContent: React.FC = () => {
     setShowWelcome,
     showClubSelection,
     setShowClubSelection,
-    playerScoutModalOpen,
-    setPlayerScoutModalOpen,
     notificationsModalOpen,
     setNotificationsModalOpen,
     showSplash,
@@ -355,16 +352,8 @@ const AppContent: React.FC = () => {
       {/* Global Search Modal */}
       <SearchModal isOpen={searchModalOpen} onClose={() => setSearchModalOpen(false)} />
 
-      {/* Supabase Authentication Modal */}
+      {/* Futfield PitchCloud Authentication Modal */}
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
-
-      {/* Top 10 Leagues Player Scout Modal */}
-      {playerScoutModalOpen && (
-        <PlayerScoutModal
-          isOpen={playerScoutModalOpen}
-          onClose={() => setPlayerScoutModalOpen(false)}
-        />
-      )}
 
       {/* Football Notifications & Match Alerts Modal */}
       <NotificationsModal
@@ -492,12 +481,17 @@ const AppContent: React.FC = () => {
       {/* Real-time In-App Notification Toast Banner */}
       <InAppNotificationToast />
 
-      {/* Splash screen */}
+      {/* Mandatory 5-Second Loading Screen */}
       {showSplash && (
         <div className="fixed inset-0 z-50 overflow-hidden">
           <AppSplashIntro
             onComplete={() => {
               setShowSplash(false);
+              if (!localStorage.getItem('futfield_welcome_seen')) {
+                setShowWelcome(true);
+              } else if (!localStorage.getItem('futfield_club_selected')) {
+                setShowClubSelection(true);
+              }
             }}
           />
         </div>
@@ -520,14 +514,16 @@ const AppContent: React.FC = () => {
         </div>
       )}
 
-      {/* One-Time Welcome Page for Football Fans */}
+      {/* One-Time Welcome Page for Every New User */}
       {!showSplash && !showIntro && showWelcome && (
         <div className="fixed inset-0 z-50 overflow-hidden">
           <WelcomePage
             onEnter={() => {
               localStorage.setItem('futfield_welcome_seen', 'true');
               setShowWelcome(false);
-              setShowClubSelection(true);
+              if (!localStorage.getItem('futfield_club_selected')) {
+                setShowClubSelection(true);
+              }
             }}
             onReplayIntro={() => {
               setShowIntro(true);

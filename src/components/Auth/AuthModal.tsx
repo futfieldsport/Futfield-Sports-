@@ -4,19 +4,24 @@ import {
   Mail,
   User,
   AtSign,
-  Shield,
   Eye,
   EyeOff,
   CheckCircle2,
   AlertCircle,
   ArrowRight,
-  Flame,
-  Globe,
+  ArrowLeft,
+  KeyRound,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
-import { loginWithEmail, signupWithEmail } from '../../services/supabaseClient';
+import {
+  loginWithEmail,
+  signupWithEmail,
+  requestPasswordReset,
+  confirmPasswordReset,
+} from '../../services/supabaseClient';
 import { WORLD_COUNTRIES, getCountryFlag } from '../../data/worldCountries';
 import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
+import { isCreatorEmail, isReservedFutfieldText } from '../../utils/creatorGuard';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -31,9 +36,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 }) => {
   const { updateUser, addFanPoints } = useFootball();
 
-  const [mode, setMode] = useState<'login' | 'signup'>(defaultMode);
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot' | 'reset'>(defaultMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [issuedCodeHint, setIssuedCodeHint] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
@@ -68,6 +76,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const resolvedFavoriteClub =
     favoriteClub === '__custom__' ? customClubInput.trim() || 'Futfield FC' : favoriteClub;
 
+  const switchMode = (nextMode: 'login' | 'signup' | 'forgot' | 'reset') => {
+    setMode(nextMode);
+    setError(null);
+    setSuccessMsg(null);
+    if (nextMode !== 'reset') {
+      setIssuedCodeHint(null);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -75,10 +92,63 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setLoading(true);
 
     try {
+      if (mode === 'forgot') {
+        const cleanEmail = email.trim().toLowerCase();
+        const res = await requestPasswordReset(cleanEmail);
+        if (!res.success) {
+          setError(res.error || 'Could not initiate password reset.');
+          return;
+        }
+        setIssuedCodeHint(res.verificationCode || null);
+        setSuccessMsg(
+          res.message ||
+            `Verification code issued for ${cleanEmail}. Enter the 6-digit code below to set a new password.`
+        );
+        setMode('reset');
+        return;
+      }
+
+      if (mode === 'reset') {
+        const cleanEmail = email.trim().toLowerCase();
+        if (password.length < 6) {
+          setError('New password must be at least 6 characters.');
+          return;
+        }
+        if (password !== confirmNewPassword) {
+          setError('New passwords do not match. Please re-enter carefully.');
+          return;
+        }
+        const res = await confirmPasswordReset(cleanEmail, resetCode.trim(), password);
+        if (!res.success) {
+          setError(res.error || 'Failed to reset password.');
+          return;
+        }
+        setPassword('');
+        setConfirmNewPassword('');
+        setResetCode('');
+        setIssuedCodeHint(null);
+        setMode('login');
+        setSuccessMsg(res.message || 'Password reset confirmed! Sign in with your new password.');
+        return;
+      }
+
       if (mode === 'signup') {
+        const candidateName = (name || email.split('@')[0]).trim();
+        const candidateHandle = handle
+          ? (handle.startsWith('@') ? handle.trim() : `@${handle.trim()}`)
+          : `@${email.split('@')[0]}`;
+
+        if (
+          !isCreatorEmail(email) &&
+          (isReservedFutfieldText(candidateName) || isReservedFutfieldText(candidateHandle))
+        ) {
+          setError('The name "Futfield" is strictly reserved for the official Futfield Creator account.');
+          return;
+        }
+
         const result = await signupWithEmail(email, password, {
-          name: name || email.split('@')[0],
-          handle: handle ? (handle.startsWith('@') ? handle : `@${handle}`) : `@${email.split('@')[0]}`,
+          name: candidateName,
+          handle: candidateHandle,
           favoriteClub: resolvedFavoriteClub,
           favoriteCountry,
         });
@@ -99,7 +169,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           });
         }
 
-        setSuccessMsg('Account created successfully! Welcome to FUTFIELD.');
+        setSuccessMsg(
+          isCreatorEmail(email)
+            ? 'Official Futfield Creator account verified! +100 Pts added.'
+            : 'Account created! You are now following @futfield and earned +100 Pts.'
+        );
         addFanPoints(100, 'Joined FUTFIELD');
         setTimeout(() => onClose(), 1200);
       } else {
@@ -136,10 +210,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const handleInstantVerifiedEntry = () => {
+    const resolvedEmail = email || 'fan@example.com';
+    const resolvedName = (name || resolvedEmail.split('@')[0] || 'Verified Fan').trim();
+    const resolvedHandle = handle
+      ? (handle.startsWith('@') ? handle.trim() : `@${handle.trim()}`)
+      : `@${resolvedEmail.split('@')[0]}`;
+
+    if (
+      !isCreatorEmail(resolvedEmail) &&
+      (isReservedFutfieldText(resolvedName) || isReservedFutfieldText(resolvedHandle))
+    ) {
+      setError('The name "Futfield" is strictly reserved for the official Futfield Creator account.');
+      return;
+    }
+
     updateUser({
-      email: email || 'fan@futfield.com',
-      name: name || email.split('@')[0] || 'Verified Fan',
-      handle: handle ? (handle.startsWith('@') ? handle : `@${handle}`) : `@${(email || 'fan').split('@')[0]}`,
+      email: resolvedEmail,
+      name: resolvedName,
+      handle: resolvedHandle,
       favoriteClub: resolvedFavoriteClub,
       favoriteCountry,
       favoriteCountryFlag: getCountryFlag(favoriteCountry),
@@ -165,7 +253,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
           <div className="inline-flex items-center gap-2.5 mb-2">
             <img
-              src="/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg"
+              src="/futfield-logo.jpg"
               alt="FUTFIELD Official Logo"
               referrerPolicy="no-referrer"
               className="w-8 h-8 rounded-xl object-contain drop-shadow"
@@ -178,54 +266,65 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <p className="text-xs text-slate-600 dark:text-white/65 max-w-xs mx-auto leading-relaxed">
             {mode === 'signup'
               ? 'Connect with football fans worldwide, follow live matches & share your takes.'
+              : mode === 'forgot'
+              ? 'Enter your account email to receive a 6-digit password reset code.'
+              : mode === 'reset'
+              ? 'Enter your 6-digit reset verification code and choose a new password.'
               : 'Sign in to access your fan points, favorite clubs, and predictions.'}
           </p>
 
           {/* Mode Switch Tabs */}
-          <div className="mt-4 grid grid-cols-2 p-1 bg-slate-200/70 dark:bg-black/40 rounded-xl border border-slate-200 dark:border-white/8">
-            <button
-              type="button"
-              onClick={() => {
-                setMode('signup');
-                setError(null);
-              }}
-              className={`min-h-[40px] py-2 rounded-lg text-xs font-bold transition-all ${
-                mode === 'signup'
-                  ? 'bg-[#00E676] text-black shadow-md shadow-[#00E676]/20'
-                  : 'text-slate-600 dark:text-white/65 hover:text-black dark:hover:text-white'
-              }`}
-            >
-              Sign Up
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMode('login');
-                setError(null);
-              }}
-              className={`min-h-[40px] py-2 rounded-lg text-xs font-bold transition-all ${
-                mode === 'login'
-                  ? 'bg-[#00E676] text-black shadow-md shadow-[#00E676]/20'
-                  : 'text-slate-600 dark:text-white/65 hover:text-black dark:hover:text-white'
-              }`}
-            >
-              Sign In
-            </button>
-          </div>
+          {(mode === 'login' || mode === 'signup') ? (
+            <div className="mt-4 grid grid-cols-2 p-1 bg-slate-200/70 dark:bg-black/40 rounded-xl border border-slate-200 dark:border-white/8">
+              <button
+                type="button"
+                onClick={() => switchMode('signup')}
+                className={`min-h-[44px] py-2 rounded-lg text-xs font-bold transition-all ${
+                  mode === 'signup'
+                    ? 'bg-[#00E676] text-black shadow-md shadow-[#00E676]/20'
+                    : 'text-slate-600 dark:text-white/65 hover:text-black dark:hover:text-white'
+                }`}
+              >
+                Sign Up
+              </button>
+              <button
+                type="button"
+                onClick={() => switchMode('login')}
+                className={`min-h-[44px] py-2 rounded-lg text-xs font-bold transition-all ${
+                  mode === 'login'
+                    ? 'bg-[#00E676] text-black shadow-md shadow-[#00E676]/20'
+                    : 'text-slate-600 dark:text-white/65 hover:text-black dark:hover:text-white'
+                }`}
+              >
+                Sign In
+              </button>
+            </div>
+          ) : (
+            <div className="mt-3 flex items-center justify-center">
+              <button
+                type="button"
+                onClick={() => switchMode('login')}
+                className="min-h-[40px] px-3 py-1.5 rounded-xl bg-slate-200/80 dark:bg-white/10 text-slate-800 dark:text-white text-xs font-bold inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Back to Sign In</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-3.5 no-scrollbar">
           {error && (
-            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs space-y-2">
+            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-300 text-xs space-y-2">
               <div className="flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
                 <span>{error}</span>
               </div>
               {error.toLowerCase().includes('email not confirmed') && (
                 <div className="pt-1.5 border-t border-rose-500/20">
-                  <p className="text-[11px] text-white/70 mb-2">
-                    Supabase requires email link verification by default. You can confirm via your inbox, or enter FUTFIELD immediately:
+                  <p className="text-[11px] text-slate-600 dark:text-white/70 mb-2">
+                    Futfield PitchCloud requires email link verification by default. You can confirm via your inbox, or enter FUTFIELD immediately:
                   </p>
                   <button
                     type="button"
@@ -240,9 +339,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
 
           {successMsg && (
-            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-[#00E676]" />
-              <span>{successMsg}</span>
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs space-y-1.5">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-[#00E676]" />
+                <span>{successMsg}</span>
+              </div>
+              {issuedCodeHint && mode === 'reset' && (
+                <div className="p-2 rounded-lg bg-white/80 dark:bg-black/40 border border-emerald-500/30 flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-slate-700 dark:text-white/80">
+                    Verification Code:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setResetCode(issuedCodeHint)}
+                    className="font-mono font-black text-emerald-700 dark:text-[#00E676] hover:underline"
+                    title="Tap to fill verification code"
+                  >
+                    {issuedCodeHint} (Tap to fill)
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -257,7 +373,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     placeholder="e.g. Alex"
                     value={name}
                     onChange={e => setName(e.target.value)}
-                    className="w-full bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-8 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                    className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-8 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                     required
                   />
                 </div>
@@ -272,7 +388,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     placeholder="alex_footy"
                     value={handle}
                     onChange={e => setHandle(e.target.value)}
-                    className="w-full bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-8 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                    className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-8 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                     required
                   />
                 </div>
@@ -290,37 +406,95 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 placeholder="fan@football.com"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                className="w-full bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-9 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-9 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                 required
               />
             </div>
           </div>
 
-          {/* Password Field */}
-          <div className="space-y-1">
-            <label className="text-[11px] font-bold text-slate-700 dark:text-white/60">Password</label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 dark:text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="w-full bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-9 pr-9 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-white/40 hover:text-black dark:hover:text-white"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+          {/* 6-Digit Reset Code Field */}
+          {mode === 'reset' && (
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-slate-700 dark:text-white/60">
+                6-Digit Reset Code
+              </label>
+              <div className="relative">
+                <KeyRound className="w-4 h-4 text-slate-400 dark:text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="Enter 6-digit code"
+                  value={resetCode}
+                  onChange={e => setResetCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs font-mono tracking-widest rounded-xl pl-9 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                  required
+                />
+              </div>
             </div>
-            {mode === 'signup' && (
-              <span className="text-[10px] text-slate-400 dark:text-white/40">Minimum 6 characters</span>
-            )}
-          </div>
+          )}
+
+          {/* Password Field (Shown in login, signup, reset) */}
+          {mode !== 'forgot' && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 dark:text-white/60">
+                  {mode === 'reset' ? 'New Password' : 'Password'}
+                </label>
+                {mode === 'login' && (
+                  <button
+                    type="button"
+                    onClick={() => switchMode('forgot')}
+                    className="min-h-[32px] px-1 text-[11px] font-bold text-emerald-700 dark:text-[#00E676] hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 dark:text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-9 pr-10 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-400 dark:text-white/40 hover:text-black dark:hover:text-white"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              {(mode === 'signup' || mode === 'reset') && (
+                <span className="text-[10px] text-slate-400 dark:text-white/40">Minimum 6 characters</span>
+              )}
+            </div>
+          )}
+
+          {/* Confirm New Password Field in reset mode */}
+          {mode === 'reset' && (
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-slate-700 dark:text-white/60">
+                Confirm New Password
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 dark:text-white/40 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Re-enter new password"
+                  value={confirmNewPassword}
+                  onChange={e => setConfirmNewPassword(e.target.value)}
+                  className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl pl-9 pr-3 py-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                  required
+                />
+              </div>
+            </div>
+          )}
 
           {/* All World Countries & Global Clubs Selection for Sign Up */}
           {mode === 'signup' && (
@@ -348,7 +522,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <select
                   value={favoriteCountry}
                   onChange={e => setFavoriteCountry(e.target.value)}
-                  className="w-full min-h-[42px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                  className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                 >
                   {filteredCountries.map(c => (
                     <option key={c.code + c.name} value={c.name} className="dark:bg-[#12171F]">
@@ -381,7 +555,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <select
                   value={favoriteClub}
                   onChange={e => setFavoriteClub(e.target.value)}
-                  className="w-full min-h-[42px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
+                  className="w-full min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl p-2.5 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#00E676]"
                 >
                   {filteredClubs.map(c => (
                     <option key={c.id} value={c.name} className="dark:bg-[#12171F]">
@@ -399,7 +573,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     placeholder="Type any football club worldwide..."
                     value={customClubInput}
                     onChange={e => setCustomClubInput(e.target.value)}
-                    className="w-full mt-1 bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl px-3 py-2 border border-[#00E676]/50 focus:outline-none"
+                    className="w-full mt-1 min-h-[44px] bg-slate-100 dark:bg-black/40 text-slate-900 dark:text-white text-xs rounded-xl px-3 py-2 border border-[#00E676]/50 focus:outline-none"
                     required
                   />
                 )}
@@ -408,15 +582,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
 
           {/* Submit Action Button */}
-          <div className="pt-2">
+          <div className="pt-2 space-y-2">
             <button
               type="submit"
               disabled={loading}
               className="w-full min-h-[46px] py-3 rounded-xl bg-[#00E676] hover:bg-[#00c864] text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-[#00E676]/20 transition-all active:scale-[0.98] disabled:opacity-50"
             >
-              <span>{loading ? 'Signing in...' : mode === 'signup' ? 'Create Fan Profile (+100 Pts)' : 'Sign In to FUTFIELD'}</span>
+              <span>
+                {loading
+                  ? 'Processing...'
+                  : mode === 'signup'
+                  ? 'Create Fan Profile (+100 Pts)'
+                  : mode === 'forgot'
+                  ? 'Send 6-Digit Reset Code'
+                  : mode === 'reset'
+                  ? 'Reset Password & Continue'
+                  : 'Sign In to FUTFIELD'}
+              </span>
               <ArrowRight className="w-4 h-4" />
             </button>
+
+            {mode === 'forgot' && (
+              <button
+                type="button"
+                onClick={() => switchMode('reset')}
+                className="w-full min-h-[40px] py-1.5 text-xs font-bold text-emerald-700 dark:text-[#00E676] hover:underline"
+              >
+                Already have a 6-digit reset code? Enter it now
+              </button>
+            )}
           </div>
 
           {/* Guest Escape Hatch */}
@@ -424,7 +618,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="min-h-[40px] px-3 text-xs font-medium text-slate-600 dark:text-white/60 hover:text-slate-900 dark:hover:text-white transition-colors"
+              className="min-h-[44px] px-3 text-xs font-medium text-slate-600 dark:text-white/60 hover:text-slate-900 dark:hover:text-white transition-colors"
             >
               Continue exploring as guest
             </button>

@@ -82,7 +82,7 @@ export const TopBar: React.FC<TopBarProps> = ({ onOpenCreatePost }) => {
           aria-label="FUTFIELD Home"
         >
           <img
-            src="/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg"
+            src="/futfield-logo.jpg"
             alt="FUTFIELD Official Logo"
             referrerPolicy="no-referrer"
             className="w-7 h-7 rounded-lg object-contain ring-1 ring-slate-200 dark:ring-white/10 transition-transform group-hover:scale-105"

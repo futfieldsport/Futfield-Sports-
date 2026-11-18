@@ -116,7 +116,7 @@ export const LegalPagesModal: React.FC<LegalPagesModalProps> = ({
               </p>
               <h4 className="font-bold text-slate-900 dark:text-white pt-1">3. Intellectual Property</h4>
               <p>
-                All football logos, live match data feeds, scores, trademarks, and AI tactical tools are property of FUTFIELD and its licensed partners.
+                All football logos, live match data feeds, scores, trademarks, and Futfield tactical tools are property of FUTFIELD and its licensed partners.
               </p>
             </div>
           )}
@@ -168,7 +168,7 @@ export const LegalPagesModal: React.FC<LegalPagesModalProps> = ({
               </p>
               <h4 className="font-bold text-slate-900 dark:text-white pt-1">2. Refund Eligibility & Timelines</h4>
               <p>
-                Due to immediate digital access to live match data feeds, AI tactical tools, and premium creator feeds, subscription fees are generally non-refundable. However, if you experience a duplicate charge, accidental renewal, or technical billing error processed via Paystack, you may request a refund within 48 hours by contacting our support team at futfieldsport@gmail.com. Approved refunds are processed back to your original payment card via Paystack within 3-5 business days.
+                Due to immediate digital access to live match data feeds, Futfield tactical tools, and premium creator feeds, subscription fees are generally non-refundable. However, if you experience a duplicate charge, accidental renewal, or technical billing error processed via Paystack, you may request a refund within 48 hours by contacting our support team at futfieldsport@gmail.com. Approved refunds are processed back to your original payment card via Paystack within 3-5 business days.
               </p>
             </div>
           )}

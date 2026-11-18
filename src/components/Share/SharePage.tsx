@@ -19,7 +19,8 @@ import {
   User,
   ExternalLink,
   X,
-  Zap,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { haptics } from '../../utils/haptics';
@@ -28,7 +29,7 @@ import {
   PROD_DOMAIN,
   SharePayload,
   ShareChannel,
-  buildShareUrl,
+  sanitizeShareUrl,
   buildUserInviteUrl,
   buildVideoShareUrl,
   buildMatchShareUrl,
@@ -52,29 +53,22 @@ interface PhoneSharePanelProps {
 export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onShared }) => {
   const { addNotification, addFanPoints, addPost, setActiveTab, closeShareSheet } = useFootball();
   const [phoneInput, setPhoneInput] = useState('');
+  const [showPhoneBox, setShowPhoneBox] = useState(false);
+  const [showQrCard, setShowQrCard] = useState(false);
   const [copied, setCopied] = useState(false);
   const [sharedToFeed, setSharedToFeed] = useState(false);
   const [sharingToFeed, setSharingToFeed] = useState(false);
-  const [nativeNotice, setNativeNotice] = useState<string | null>(null);
+  const [statusFeedback, setStatusFeedback] = useState<string | null>(null);
   const [qrSvg, setQrSvg] = useState<string>('');
   const [rewardedOnce, setRewardedOnce] = useState(false);
 
   const deviceCtx = useMemo(() => detectDevicePhoneContext(), []);
 
-  // Strict production share URL (guarantees dev URLs are never generated)
-  const safeProdUrl = useMemo(() => {
-    if (payload.url.includes('ais-dev') || payload.url.includes('run.app') || payload.url.includes('localhost')) {
-      try {
-        const u = new URL(payload.url);
-        return `${PROD_DOMAIN}${u.pathname}${u.search}`;
-      } catch {
-        return PROD_DOMAIN;
-      }
-    }
-    return payload.url;
-  }, [payload.url]);
+  // Strict production share URL (dev / localhost / typo domains are always rewritten to PROD_DOMAIN)
+  const safeProdUrl = useMemo(() => sanitizeShareUrl(payload.url), [payload.url]);
 
   useEffect(() => {
+    if (!showQrCard) return;
     let active = true;
     QRCode.toString(safeProdUrl, {
       type: 'svg',
@@ -94,7 +88,7 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
     return () => {
       active = false;
     };
-  }, [safeProdUrl]);
+  }, [safeProdUrl, showQrCard]);
 
   const recordChannelShare = async (channel: ShareChannel) => {
     trackShareEvent({
@@ -104,12 +98,12 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
     }).catch(() => {});
     if (!rewardedOnce) {
       setRewardedOnce(true);
-      addFanPoints(5, 'Shared via Phone');
+      addFanPoints(5, 'Shared from FUTFIELD');
     }
     onShared?.(channel);
   };
 
-  const fullShareText = `${payload.title} — ${payload.text}\n${safeProdUrl}`;
+  const fullShareText = `${payload.title}\n${payload.text}\n${safeProdUrl}`;
   const cleanDigits = formatPhoneDigitsOnly(phoneInput);
   const smsHref = buildSmsHref(fullShareText, phoneInput);
   const smsContactsHref = buildSmsHref(fullShareText);
@@ -124,19 +118,20 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
     const ok = await copyTextSafely(safeProdUrl);
     if (ok) {
       setCopied(true);
+      setStatusFeedback('Production link copied to clipboard.');
       recordChannelShare('copy');
       addNotification({
-        title: 'Production Link Copied',
-        body: `${safeProdUrl} copied. Paste into WhatsApp, Messages, or any phone app.`,
+        title: 'Link Copied',
+        body: `${safeProdUrl} copied to clipboard.`,
         type: 'system',
       });
       setTimeout(() => setCopied(false), 2400);
     }
   };
 
-  const handleNativePhoneShare = async () => {
+  const handleNativeDeviceShare = async () => {
     haptics.light();
-    setNativeNotice(null);
+    setStatusFeedback(null);
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
       try {
         await navigator.share({
@@ -145,9 +140,10 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
           url: safeProdUrl,
         });
         recordChannelShare('native');
+        setStatusFeedback('Shared via device share sheet!');
         addNotification({
-          title: 'Shared to Phone App',
-          body: 'Sent directly through your phone share sheet.',
+          title: 'Shared Successfully',
+          body: `Sent "${payload.title}" through your device share sheet.`,
           type: 'system',
         });
         return;
@@ -156,10 +152,10 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
       }
     }
     const ok = await copyTextSafely(safeProdUrl);
-    setNativeNotice(
+    setStatusFeedback(
       ok
-        ? 'Production link copied. Share directly via WhatsApp, SMS, or QR below.'
-        : 'Use SMS, WhatsApp, Telegram, or the QR code below to send directly to any phone.'
+        ? 'Link copied! Pick WhatsApp, Messages, or any social app below.'
+        : 'Pick WhatsApp, Messages, or any app below to share.'
     );
   };
 
@@ -180,18 +176,15 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
         thumbnailUrl: payload.previewImage || undefined,
       });
       setSharedToFeed(true);
+      setStatusFeedback('Posted to your FUTFIELD Home Feed!');
       recordChannelShare('native');
       addNotification({
         title: 'Shared to FUTFIELD Feed',
-        body: `"${payload.title}" is now posted to your home feed.`,
+        body: `"${payload.title}" is now posted on your Home Feed.`,
         type: 'system',
       });
     } catch {
-      addNotification({
-        title: 'Share Failed',
-        body: 'Could not post to your FUTFIELD feed.',
-        type: 'system',
-      });
+      setStatusFeedback('Could not post to your FUTFIELD Feed.');
     } finally {
       setSharingToFeed(false);
     }
@@ -205,7 +198,7 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = `futfield-share-qr.svg`;
+      a.download = 'futfield-share-qr.svg';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -215,26 +208,22 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
   };
 
   return (
-    <div className="space-y-3.5">
-      {/* Device Connection Card & Preview */}
-      <div className="rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/10 p-4 shadow-sm space-y-3">
+    <div className="space-y-3">
+      {/* 1. Content Preview + Production Link Bar */}
+      <div className="rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 p-3.5 space-y-3 shadow-sm">
         <div className="flex items-center gap-3">
           {payload.previewImage ? (
             <img
               src={payload.previewImage}
               alt={payload.title}
-              className="w-14 h-14 rounded-2xl object-cover shrink-0 border border-slate-200 dark:border-white/10"
+              className="w-16 h-12 rounded-xl object-contain bg-black shrink-0 border border-slate-200 dark:border-white/10"
             />
           ) : (
-            <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 text-emerald-700 dark:text-[#00E676] flex items-center justify-center shrink-0">
-              <Smartphone className="w-7 h-7" />
+            <div className="w-12 h-12 rounded-xl bg-[#00E676]/15 text-emerald-700 dark:text-[#00E676] flex items-center justify-center shrink-0">
+              <Share2 className="w-5 h-5" />
             </div>
           )}
           <div className="min-w-0 flex-1 space-y-0.5">
-            <p className="text-[11px] font-bold text-emerald-700 dark:text-[#00E676] flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#00E676] inline-block" />
-              <span>{deviceCtx.label}</span>
-            </p>
             <h3 className="font-display font-black text-sm text-slate-900 dark:text-white line-clamp-1">
               {payload.title}
             </h3>
@@ -244,192 +233,100 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
           </div>
         </div>
 
-        {/* One-Tap Copy URL Bar — Always Strictly Uses Production Domain */}
-        <div className="flex items-center gap-2 p-1.5 pl-3 rounded-2xl bg-slate-100 dark:bg-black/40 border border-slate-200 dark:border-white/10">
+        {/* One-Tap Copy Link */}
+        <div className="flex items-center gap-2 p-1.5 pl-3 rounded-xl bg-slate-100 dark:bg-black/45 border border-slate-200 dark:border-white/10">
           <span className="text-[11px] font-mono text-emerald-700 dark:text-[#00E676] font-bold truncate flex-1 select-all">
             {safeProdUrl}
           </span>
           <button
             type="button"
             onClick={handleCopy}
-            className="min-h-[40px] px-3.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-black font-extrabold text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-transform"
+            className="min-h-[38px] px-3.5 rounded-lg bg-slate-900 dark:bg-[#00E676] text-white dark:text-black font-black text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-transform"
           >
-            {copied ? <Check className="w-3.5 h-3.5 text-[#00E676]" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? 'Copied' : 'Copy'}</span>
+            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copied ? 'Copied' : 'Copy Link'}</span>
           </button>
         </div>
+      </div>
 
-        {/* WhatsApp Viral Sharing Card */}
+      {/* 2. Primary One-Tap Share Row */}
+      <div className="grid grid-cols-2 gap-2">
         <a
           href={whatsappHref}
           target="_blank"
           rel="noopener noreferrer"
           onClick={() => recordChannelShare('whatsapp')}
-          className="w-full min-h-[46px] px-3 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-black font-black text-xs shadow-md shadow-[#25D366]/20 flex items-center justify-center gap-2 transition-transform active:scale-98"
+          className="min-h-[46px] px-3 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-black font-black text-xs flex items-center justify-center gap-2 shadow-sm active:scale-98 transition-transform"
         >
           <MessageCircle className="w-4 h-4 stroke-[2.5]" />
-          <span>Share to WhatsApp (Shows FUTFIELD Logo &amp; Preview)</span>
+          <span>WhatsApp</span>
         </a>
 
-        {/* In-App Repost + Native Phone Share */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <button
-            type="button"
-            disabled={sharingToFeed}
-            onClick={handleShareToAppFeed}
-            className={`w-full min-h-[44px] px-3 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-colors ${
-              sharedToFeed
-                ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-700 dark:text-[#00E676]'
-                : 'bg-slate-900 dark:bg-white text-white dark:text-black hover:opacity-90'
-            }`}
-          >
-            {sharedToFeed ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
-            <span>{sharedToFeed ? 'Shared to Feed' : sharingToFeed ? 'Sharing...' : 'Share to FUTFIELD Feed'}</span>
-          </button>
+        <button
+          type="button"
+          onClick={handleNativeDeviceShare}
+          className="min-h-[46px] px-3 rounded-2xl bg-[#00E676] hover:bg-[#00c864] text-black font-black text-xs flex items-center justify-center gap-2 shadow-sm active:scale-98 transition-transform"
+        >
+          <Smartphone className="w-4 h-4 stroke-[2.5]" />
+          <span>{deviceCtx.supportsNativeShare ? 'Device Share' : 'Share Apps'}</span>
+        </button>
 
-          <button
-            type="button"
-            onClick={handleNativePhoneShare}
-            className="w-full min-h-[44px] px-3 rounded-2xl bg-[#00E676] hover:bg-[#00c864] text-black font-black text-xs shadow-lg shadow-[#00E676]/20 flex items-center justify-center gap-2 transition-colors"
-          >
-            <Smartphone className="w-4 h-4 stroke-[2.5]" />
-            <span>Send to Phone Apps</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={sharingToFeed}
+          onClick={handleShareToAppFeed}
+          className={`min-h-[44px] px-3 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-colors ${
+            sharedToFeed
+              ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-700 dark:text-[#00E676]'
+              : 'bg-slate-900 dark:bg-white text-white dark:text-black hover:opacity-90'
+          }`}
+        >
+          {sharedToFeed ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+          <span>{sharedToFeed ? 'Shared to Feed' : sharingToFeed ? 'Sharing...' : 'Share to Feed'}</span>
+        </button>
 
-        {sharedToFeed && (
-          <button
-            type="button"
-            onClick={() => {
-              closeShareSheet();
-              setActiveTab('home');
-              scrollToTopInstant();
-            }}
-            className="w-full min-h-[38px] rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-[#00E676] text-xs font-bold hover:bg-emerald-500/25"
-          >
-            View on Home Feed
-          </button>
-        )}
-
-        {nativeNotice && (
-          <p className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded-xl px-3 py-2 leading-snug">
-            {nativeNotice}
-          </p>
-        )}
+        <a
+          href={smsContactsHref}
+          onClick={() => recordChannelShare('sms')}
+          className="min-h-[44px] px-3 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 hover:border-[#00E676] text-slate-900 dark:text-white font-extrabold text-xs flex items-center justify-center gap-2 transition-colors"
+        >
+          <MessageSquare className="w-4 h-4 text-blue-500" />
+          <span>Messages / SMS</span>
+        </a>
       </div>
 
-      {/* Send Directly to a User's Phone Number */}
-      <div className="rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/10 p-4 shadow-sm space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <h4 className="font-display font-extrabold text-xs text-slate-900 dark:text-white flex items-center gap-1.5">
-              <Phone className="w-4 h-4 text-[#00E676]" />
-              <span>Send Direct to Any Phone Number</span>
-            </h4>
-            <p className="text-[11px] text-slate-500 dark:text-white/55">
-              Enter any friend&apos;s phone number or pick directly from your device SMS contacts
-            </p>
-          </div>
-        </div>
+      {sharedToFeed && (
+        <button
+          type="button"
+          onClick={() => {
+            closeShareSheet();
+            setActiveTab('home');
+            scrollToTopInstant();
+          }}
+          className="w-full min-h-[38px] rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-[#00E676] text-xs font-extrabold"
+        >
+          View on Home Feed
+        </button>
+      )}
 
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <input
-              type="tel"
-              inputMode="tel"
-              value={phoneInput}
-              onChange={(e) => setPhoneInput(e.target.value)}
-              placeholder="+234 800 000 0000 or +44 / +1..."
-              className="flex-1 min-h-[44px] px-3.5 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-[#00E676]"
-            />
-            {phoneInput && (
-              <button
-                type="button"
-                onClick={() => setPhoneInput('')}
-                className="min-h-[44px] min-w-[44px] rounded-2xl bg-slate-100 dark:bg-white/5 text-slate-500 flex items-center justify-center"
-                aria-label="Clear phone number"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+      {statusFeedback && (
+        <p className="text-[11px] font-bold text-emerald-700 dark:text-[#00E676] bg-emerald-500/10 border border-emerald-500/25 rounded-xl px-3 py-2 text-center">
+          {statusFeedback}
+        </p>
+      )}
 
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-white/65">
-            <span className="font-semibold">Quick prefix:</span>
-            {['+234', '+44', '+1', '+34', '+254', '+27'].map((code) => (
-              <button
-                key={code}
-                type="button"
-                onClick={() => {
-                  haptics.light();
-                  setPhoneInput((prev) => (prev.startsWith('+') ? prev : `${code}${prev.replace(/^0+/, '')}`));
-                }}
-                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-white/5 hover:bg-emerald-500/15 hover:text-emerald-700 dark:hover:text-[#00E676] font-mono font-bold transition-colors"
-              >
-                {code}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <a
-            href={cleanDigits.length >= 6 ? smsHref : smsContactsHref}
-            onClick={() => recordChannelShare('sms')}
-            className="min-h-[46px] px-3 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm"
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>{cleanDigits.length >= 6 ? 'Text This Number' : 'Open SMS Contacts'}</span>
-          </a>
-
-          <a
-            href={whatsappHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => recordChannelShare('whatsapp')}
-            className="min-h-[46px] px-3 rounded-2xl bg-[#25D366] hover:bg-[#1ebe5d] text-black font-extrabold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm"
-          >
-            <MessageCircle className="w-4 h-4" />
-            <span>{cleanDigits.length >= 6 ? 'WhatsApp Number' : 'WhatsApp Chats'}</span>
-          </a>
-        </div>
-      </div>
-
-      {/* Connected Phone Messaging & Social Launchers */}
-      <div className="rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/10 p-4 shadow-sm space-y-2.5">
-        <h4 className="font-display font-extrabold text-xs text-slate-900 dark:text-white">
-          Installed Phone Apps
-        </h4>
-        <div className="grid grid-cols-3 gap-2">
-          <a
-            href={smsContactsHref}
-            onClick={() => recordChannelShare('sms')}
-            className="min-h-[56px] p-2.5 rounded-2xl bg-slate-50 dark:bg-white/[0.04] hover:bg-blue-500/10 border border-slate-200/80 dark:border-white/10 flex flex-col items-center justify-center gap-1 text-center transition-colors"
-          >
-            <MessageSquare className="w-4 h-4 text-blue-500" />
-            <span className="text-[11px] font-bold text-slate-800 dark:text-white">Messages</span>
-          </a>
-
-          <a
-            href={buildWhatsAppHref(fullShareText)}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => recordChannelShare('whatsapp')}
-            className="min-h-[56px] p-2.5 rounded-2xl bg-slate-50 dark:bg-white/[0.04] hover:bg-emerald-500/10 border border-slate-200/80 dark:border-white/10 flex flex-col items-center justify-center gap-1 text-center transition-colors"
-          >
-            <MessageCircle className="w-4 h-4 text-[#25D366]" />
-            <span className="text-[11px] font-bold text-slate-800 dark:text-white">WhatsApp</span>
-          </a>
-
+      {/* 3. Social & QR Strip */}
+      <div className="rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 p-3 space-y-2.5">
+        <div className="grid grid-cols-5 gap-1.5">
           <a
             href={telegramHref}
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => recordChannelShare('telegram')}
-            className="min-h-[56px] p-2.5 rounded-2xl bg-slate-50 dark:bg-white/[0.04] hover:bg-sky-500/10 border border-slate-200/80 dark:border-white/10 flex flex-col items-center justify-center gap-1 text-center transition-colors"
+            className="min-h-[52px] p-1.5 rounded-xl bg-slate-50 dark:bg-white/[0.04] hover:bg-sky-500/10 flex flex-col items-center justify-center gap-1 text-center"
           >
             <Send className="w-4 h-4 text-sky-500" />
-            <span className="text-[11px] font-bold text-slate-800 dark:text-white">Telegram</span>
+            <span className="text-[10px] font-bold text-slate-800 dark:text-white">Telegram</span>
           </a>
 
           <a
@@ -437,10 +334,10 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => recordChannelShare('x')}
-            className="min-h-[56px] p-2.5 rounded-2xl bg-slate-50 dark:bg-white/[0.04] hover:bg-slate-200/70 dark:hover:bg-white/10 border border-slate-200/80 dark:border-white/10 flex flex-col items-center justify-center gap-1 text-center transition-colors"
+            className="min-h-[52px] p-1.5 rounded-xl bg-slate-50 dark:bg-white/[0.04] hover:bg-slate-200 dark:hover:bg-white/10 flex flex-col items-center justify-center gap-1 text-center"
           >
             <ExternalLink className="w-4 h-4 text-slate-800 dark:text-white" />
-            <span className="text-[11px] font-bold text-slate-800 dark:text-white">Post on X</span>
+            <span className="text-[10px] font-bold text-slate-800 dark:text-white">X</span>
           </a>
 
           <a
@@ -448,53 +345,108 @@ export const PhoneSharePanel: React.FC<PhoneSharePanelProps> = ({ payload, onSha
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => recordChannelShare('facebook')}
-            className="min-h-[56px] p-2.5 rounded-2xl bg-slate-50 dark:bg-white/[0.04] hover:bg-blue-500/10 border border-slate-200/80 dark:border-white/10 flex flex-col items-center justify-center gap-1 text-center transition-colors"
+            className="min-h-[52px] p-1.5 rounded-xl bg-slate-50 dark:bg-white/[0.04] hover:bg-blue-500/10 flex flex-col items-center justify-center gap-1 text-center"
           >
             <Globe className="w-4 h-4 text-blue-600" />
-            <span className="text-[11px] font-bold text-slate-800 dark:text-white">Facebook</span>
+            <span className="text-[10px] font-bold text-slate-800 dark:text-white">Facebook</span>
           </a>
 
           <a
             href={emailHref}
             onClick={() => recordChannelShare('email')}
-            className="min-h-[56px] p-2.5 rounded-2xl bg-slate-50 dark:bg-white/[0.04] hover:bg-amber-500/10 border border-slate-200/80 dark:border-white/10 flex flex-col items-center justify-center gap-1 text-center transition-colors"
+            className="min-h-[52px] p-1.5 rounded-xl bg-slate-50 dark:bg-white/[0.04] hover:bg-amber-500/10 flex flex-col items-center justify-center gap-1 text-center"
           >
             <Mail className="w-4 h-4 text-amber-500" />
-            <span className="text-[11px] font-bold text-slate-800 dark:text-white">Email</span>
+            <span className="text-[10px] font-bold text-slate-800 dark:text-white">Email</span>
           </a>
-        </div>
-      </div>
 
-      {/* Phone-to-Phone Camera QR Code Scanner Card */}
-      <div className="rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/10 p-4 shadow-sm flex items-center gap-4">
-        <div
-          className="w-28 h-28 rounded-2xl bg-white p-2 border border-slate-200 shrink-0 flex items-center justify-center shadow-inner"
-          aria-label="Scan QR code with another phone camera"
-          dangerouslySetInnerHTML={qrSvg ? { __html: qrSvg } : undefined}
-        >
-          {!qrSvg ? <QrCode className="w-10 h-10 text-slate-400" /> : null}
-        </div>
-        <div className="min-w-0 flex-1 space-y-2">
-          <div>
-            <h4 className="font-display font-extrabold text-xs text-slate-900 dark:text-white flex items-center gap-1.5">
-              <QrCode className="w-4 h-4 text-[#00E676]" />
-              <span>Scan With Any Phone</span>
-            </h4>
-            <p className="text-[11px] text-slate-500 dark:text-white/60 leading-snug mt-0.5">
-              Point any iPhone or Android camera here to open this link on {PROD_DOMAIN.replace('https://', '')}.
-            </p>
-          </div>
           <button
             type="button"
-            onClick={handleDownloadQr}
-            disabled={!qrSvg}
-            className="min-h-[38px] px-3 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-xs font-bold text-slate-800 dark:text-white inline-flex items-center gap-1.5 disabled:opacity-50"
+            onClick={() => {
+              haptics.light();
+              setShowQrCard((v) => !v);
+            }}
+            className={`min-h-[52px] p-1.5 rounded-xl flex flex-col items-center justify-center gap-1 text-center transition-colors ${
+              showQrCard
+                ? 'bg-[#00E676]/20 text-emerald-700 dark:text-[#00E676]'
+                : 'bg-slate-50 dark:bg-white/[0.04] text-slate-800 dark:text-white'
+            }`}
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Save QR Code</span>
+            <QrCode className="w-4 h-4 text-[#00E676]" />
+            <span className="text-[10px] font-bold">QR Code</span>
           </button>
         </div>
+
+        {/* Toggleable Phone Number Direct Send */}
+        <button
+          type="button"
+          onClick={() => setShowPhoneBox((v) => !v)}
+          className="w-full pt-2 border-t border-slate-100 dark:border-white/5 flex items-center justify-between text-xs font-bold text-slate-700 dark:text-white/80"
+        >
+          <span className="flex items-center gap-1.5">
+            <Phone className="w-3.5 h-3.5 text-[#00E676]" />
+            <span>Send directly to a phone number</span>
+          </span>
+          {showPhoneBox ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+
+        {showPhoneBox && (
+          <div className="space-y-2 pt-1">
+            <div className="flex items-center gap-2">
+              <input
+                type="tel"
+                inputMode="tel"
+                value={phoneInput}
+                onChange={(e) => setPhoneInput(e.target.value)}
+                placeholder="+234 800 000 0000..."
+                className="flex-1 min-h-[40px] px-3 rounded-xl bg-slate-50 dark:bg-black/45 border border-slate-200 dark:border-white/10 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:border-[#00E676]"
+              />
+              <a
+                href={cleanDigits.length >= 6 ? smsHref : smsContactsHref}
+                onClick={() => recordChannelShare('sms')}
+                className="min-h-[40px] px-3 rounded-xl bg-blue-600 text-white font-bold text-xs flex items-center justify-center"
+              >
+                SMS
+              </a>
+              <a
+                href={whatsappHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => recordChannelShare('whatsapp')}
+                className="min-h-[40px] px-3 rounded-xl bg-[#25D366] text-black font-black text-xs flex items-center justify-center"
+              >
+                WA
+              </a>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Expandable QR Card */}
+      {showQrCard && (
+        <div className="rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 p-3.5 flex items-center gap-3.5">
+          <div
+            className="w-24 h-24 rounded-xl bg-white p-1.5 border border-slate-200 shrink-0 flex items-center justify-center"
+            dangerouslySetInnerHTML={qrSvg ? { __html: qrSvg } : undefined}
+          >
+            {!qrSvg ? <QrCode className="w-8 h-8 text-slate-400" /> : null}
+          </div>
+          <div className="min-w-0 flex-1 space-y-2">
+            <p className="text-[11px] text-slate-600 dark:text-white/70 leading-snug">
+              Scan with any phone camera to open on {PROD_DOMAIN.replace('https://', '')}.
+            </p>
+            <button
+              type="button"
+              onClick={handleDownloadQr}
+              disabled={!qrSvg}
+              className="min-h-[36px] px-3 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-bold text-slate-800 dark:text-white inline-flex items-center gap-1.5"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Save QR</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -506,7 +458,6 @@ export const ShareFUTFIELD: React.FC = () => {
   const latestVideo = videos[0];
   const featuredLiveMatch = matches.find((m) => m.status === 'LIVE') || matches[0];
 
-  // User referral / join code
   const userSlug = useMemo(() => {
     return user.handle
       ? user.handle.replace(/^@/, '')
@@ -517,118 +468,64 @@ export const ShareFUTFIELD: React.FC = () => {
 
   const activePayload: SharePayload = useMemo(() => {
     if (selectedPreset === 'profile') {
-      const cleanHandle = (user.handle || '@futfield').replace(/^@?/, '@');
-      const shareUrl = buildUserInviteUrl(user);
+      const cleanHandle = (user.handle || '@fan').replace(/^@?/, '@');
       return {
         kind: 'profile',
         title: `${user.name} (${cleanHandle}) on FUTFIELD`,
-        text: `Follow me on FUTFIELD for matchday takes, Futfield Tube clips, and live scores!`,
-        url: shareUrl,
+        text: 'Follow me on FUTFIELD for matchday takes, Futfield Tube clips, and live scores!',
+        url: buildUserInviteUrl(user),
         previewImage: user.avatar || `${PROD_DOMAIN}/futfield-logo.jpg`,
       };
     }
     if (selectedPreset === 'video' && latestVideo) {
-      const videoShareUrl = buildVideoShareUrl(latestVideo.id);
       return {
         kind: 'video',
         targetId: latestVideo.id,
         title: latestVideo.title || 'Futfield Tube Highlight',
         text: `Watch "${latestVideo.title}" (${latestVideo.duration}) on Futfield Tube!`,
-        url: videoShareUrl,
+        url: buildVideoShareUrl(latestVideo.id),
         previewImage: latestVideo.thumbnailUrl || `${PROD_DOMAIN}/futfield-logo.jpg`,
         videoUrl: latestVideo.videoUrl,
       };
     }
     if (selectedPreset === 'scores' && featuredLiveMatch) {
-      const matchShareUrl = buildMatchShareUrl(featuredLiveMatch.id);
       return {
         kind: 'match',
         targetId: featuredLiveMatch.id,
         title: `${featuredLiveMatch.homeTeam.name} vs ${featuredLiveMatch.awayTeam.name} · FUTFIELD`,
         text: `Follow live scores (${featuredLiveMatch.homeTeam.score}-${featuredLiveMatch.awayTeam.score}) & join stadium chat!`,
-        url: matchShareUrl,
+        url: buildMatchShareUrl(featuredLiveMatch.id),
         previewImage: `${PROD_DOMAIN}/futfield-logo.jpg`,
       };
     }
 
-    // Default: Invite to App
-    const inviteUrl = `${PROD_DOMAIN}/join/${userSlug}`;
     return {
       kind: 'app',
       title: 'Join me on FUTFIELD',
       text: 'Watch match highlights, join live stadium rooms, and more!',
-      url: inviteUrl,
+      url: `${PROD_DOMAIN}/join/${encodeURIComponent(userSlug)}`,
       previewImage: `${PROD_DOMAIN}/futfield-logo.jpg`,
     };
   }, [selectedPreset, user, latestVideo, featuredLiveMatch, userSlug]);
 
-  // One-click quick actions adhering strictly to the user prompt instructions
   const handleQuickInviteApp = async () => {
     haptics.light();
-    const payload = {
-      title: 'Join me on FUTFIELD',
-      text: 'Watch match highlights, join live stadium rooms, and more!',
-      url: PROD_DOMAIN,
-    };
+    const url = `${PROD_DOMAIN}/join/${encodeURIComponent(userSlug)}`;
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
       try {
-        await navigator.share(payload);
+        await navigator.share({
+          title: 'Join me on FUTFIELD',
+          text: 'Watch match highlights, join live stadium rooms, and more!',
+          url,
+        });
         return;
       } catch (err: any) {
         if (err?.name === 'AbortError') return;
       }
     }
-    await copyTextSafely(`${PROD_DOMAIN}/join/${userSlug}`);
+    await copyTextSafely(url);
     addNotification({
       title: 'Invite Link Copied',
-      body: `Copied ${PROD_DOMAIN}/join/${userSlug}`,
-      type: 'system',
-    });
-  };
-
-  const handleQuickLatestVideo = async () => {
-    if (!latestVideo) return;
-    haptics.light();
-    const url = buildVideoShareUrl(latestVideo.id);
-    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-      try {
-        await navigator.share({
-          title: latestVideo.title,
-          text: `Watch ${latestVideo.title} on Futfield Tube!`,
-          url,
-        });
-        return;
-      } catch (err: any) {
-        if (err?.name === 'AbortError') return;
-      }
-    }
-    await copyTextSafely(url);
-    addNotification({
-      title: 'Video Link Copied',
-      body: `Copied ${url}`,
-      type: 'system',
-    });
-  };
-
-  const handleQuickLiveMatch = async () => {
-    if (!featuredLiveMatch) return;
-    haptics.light();
-    const url = buildMatchShareUrl(featuredLiveMatch.id);
-    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-      try {
-        await navigator.share({
-          title: `${featuredLiveMatch.homeTeam.name} vs ${featuredLiveMatch.awayTeam.name}`,
-          text: `Follow live match scores and stadium chat on FUTFIELD!`,
-          url,
-        });
-        return;
-      } catch (err: any) {
-        if (err?.name === 'AbortError') return;
-      }
-    }
-    await copyTextSafely(url);
-    addNotification({
-      title: 'Live Match Link Copied',
       body: `Copied ${url}`,
       type: 'system',
     });
@@ -636,7 +533,6 @@ export const ShareFUTFIELD: React.FC = () => {
 
   return (
     <div className="pb-24 max-w-2xl mx-auto px-3 sm:px-4 pt-3 space-y-3.5">
-      {/* Header */}
       <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-white/10">
         <button
           type="button"
@@ -651,7 +547,7 @@ export const ShareFUTFIELD: React.FC = () => {
         </button>
         <div className="text-right">
           <h1 className="font-display text-sm font-black text-slate-900 dark:text-white">
-            Share FUTFIELD to Phone
+            Share FUTFIELD
           </h1>
           <p className="text-[10px] text-emerald-700 dark:text-[#00E676] font-bold">
             {PROD_DOMAIN.replace('https://', '')}
@@ -659,37 +555,15 @@ export const ShareFUTFIELD: React.FC = () => {
         </div>
       </div>
 
-      {/* Quick Action One-Tap Launchers */}
-      <div className="grid grid-cols-3 gap-2">
-        <button
-          type="button"
-          onClick={handleQuickInviteApp}
-          className="min-h-[48px] p-2 rounded-2xl bg-[#00E676] hover:bg-[#00c864] text-black font-black text-xs flex flex-col items-center justify-center gap-0.5 shadow-md shadow-[#00E676]/20 transition-transform active:scale-95"
-        >
-          <Smartphone className="w-4 h-4 stroke-[2.5]" />
-          <span>Invite to App</span>
-        </button>
-
-        <button
-          type="button"
-          disabled={!latestVideo}
-          onClick={handleQuickLatestVideo}
-          className="min-h-[48px] p-2 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 hover:border-[#00E676] text-slate-900 dark:text-white font-extrabold text-xs flex flex-col items-center justify-center gap-0.5 shadow-sm transition-transform active:scale-95 disabled:opacity-40"
-        >
-          <Film className="w-4 h-4 text-[#00E676]" />
-          <span>Latest Video</span>
-        </button>
-
-        <button
-          type="button"
-          disabled={!featuredLiveMatch}
-          onClick={handleQuickLiveMatch}
-          className="min-h-[48px] p-2 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200 dark:border-white/10 hover:border-[#00E676] text-slate-900 dark:text-white font-extrabold text-xs flex flex-col items-center justify-center gap-0.5 shadow-sm transition-transform active:scale-95 disabled:opacity-40"
-        >
-          <Trophy className="w-4 h-4 text-amber-400" />
-          <span>Live Match</span>
-        </button>
-      </div>
+      {/* Invite Banner */}
+      <button
+        type="button"
+        onClick={handleQuickInviteApp}
+        className="w-full min-h-[46px] px-4 rounded-2xl bg-[#00E676] hover:bg-[#00c864] text-black font-black text-xs flex items-center justify-center gap-2 shadow-md shadow-[#00E676]/20"
+      >
+        <Share2 className="w-4 h-4 stroke-[2.5]" />
+        <span>One-Tap Invite to FUTFIELD</span>
+      </button>
 
       {/* What to Share Preset Selector */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -711,7 +585,7 @@ export const ShareFUTFIELD: React.FC = () => {
                 setSelectedPreset(item.id);
                 scrollToTopInstant();
               }}
-              className={`min-h-[44px] px-3 py-2 rounded-2xl border text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 ${
+              className={`min-h-[42px] px-3 py-2 rounded-2xl border text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 ${
                 active
                   ? 'bg-slate-900 text-white dark:bg-white dark:text-black border-slate-900 dark:border-white shadow-sm'
                   : 'bg-white dark:bg-[#12171F] border-slate-200 dark:border-white/10 text-slate-700 dark:text-white/80 hover:border-[#00E676]/50'
@@ -751,14 +625,14 @@ export const PhoneShareModal: React.FC<{
         <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-white/10">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-[#00E676]/15 text-emerald-700 dark:text-[#00E676] flex items-center justify-center">
-              <Smartphone className="w-4 h-4" />
+              <Share2 className="w-4 h-4" />
             </div>
             <div>
               <h2 className="font-display font-black text-sm text-slate-900 dark:text-white">
-                Send to Phone
+                Share via FUTFIELD
               </h2>
               <p className="text-[10px] text-slate-500 dark:text-white/55">
-                {PROD_DOMAIN.replace('https://', '')} · Contacts · SMS · WhatsApp · QR
+                {PROD_DOMAIN.replace('https://', '')} · Instant Link &amp; Social Share
               </p>
             </div>
           </div>
@@ -766,7 +640,7 @@ export const PhoneShareModal: React.FC<{
             type="button"
             onClick={onClose}
             aria-label="Close share sheet"
-            className="min-h-[44px] min-w-[44px] rounded-full bg-slate-200/70 dark:bg-white/10 text-slate-700 dark:text-white flex items-center justify-center hover:bg-slate-300/70 dark:hover:bg-white/20"
+            className="min-h-[40px] min-w-[40px] rounded-full bg-slate-200/70 dark:bg-white/10 text-slate-700 dark:text-white flex items-center justify-center hover:bg-slate-300/70 dark:hover:bg-white/20"
           >
             <X className="w-4 h-4" />
           </button>

@@ -125,7 +125,7 @@ export const CinematicIntro: React.FC<CinematicIntroProps> = ({ onComplete }) =>
             <div className="relative group cursor-pointer animate-float-glow">
               <div className="relative w-60 h-60 sm:w-72 sm:h-72 md:w-80 md:h-80 rounded-[40px] overflow-hidden shadow-[0_20px_70px_rgba(0,230,118,0.28)] border border-[#00E676]/35 bg-[#0D1117]">
                 <img
-                  src="/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg"
+                  src="/futfield-logo.jpg"
                   alt="FUTFIELD Official App Shield Icon"
                   className="w-full h-full object-contain p-2 scale-100 transition-transform duration-500 group-hover:scale-105"
                 />
@@ -153,7 +153,7 @@ export const CinematicIntro: React.FC<CinematicIntroProps> = ({ onComplete }) =>
           <div className="relative flex flex-col items-center justify-center w-full max-w-3xl transition-all duration-700 ease-out animate-fadeIn">
             <div className="relative w-full rounded-3xl overflow-hidden shadow-[0_24px_80px_rgba(0,230,118,0.22)] border border-[#00E676]/35 bg-[#0D1117] aspect-[16/10] sm:aspect-[16/9] flex items-center justify-center">
               <img
-                src="/assets/aistudio/IMG-20261102-WA2735_f2548d41.jpg"
+                src="/og-image.jpg"
                 alt="FUTFIELD - Where Fans Become Family"
                 className="w-full h-full object-cover object-center animate-kenburns"
               />

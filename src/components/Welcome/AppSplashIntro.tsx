@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Zap, FastForward, Shield, Activity } from 'lucide-react';
+import { Shield, Activity } from 'lucide-react';
 
 interface AppSplashIntroProps {
   onComplete: () => void;
@@ -9,6 +9,11 @@ export const AppSplashIntro: React.FC<AppSplashIntroProps> = ({ onComplete }) =>
   const [timeLeft, setTimeLeft] = useState<number>(5.0);
   const [elapsed, setElapsed] = useState<number>(0);
   const startTimeRef = useRef<number>(Date.now());
+  const onCompleteRef = useRef(onComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     startTimeRef.current = Date.now();
@@ -21,44 +26,35 @@ export const AppSplashIntro: React.FC<AppSplashIntroProps> = ({ onComplete }) =>
 
       if (currentElapsed >= 5.0) {
         clearInterval(interval);
-        onComplete();
+        onCompleteRef.current();
       }
     }, 30);
 
     return () => clearInterval(interval);
-  }, [onComplete]);
-
-  const handleSkip = () => {
-    onComplete();
-  };
+  }, []);
 
   const progressPercent = Math.min(100, (elapsed / 5.0) * 100);
+  const statusStage =
+    elapsed < 1.5
+      ? 'Connecting Live Global Match Engine...'
+      : elapsed < 3.2
+      ? 'Loading Futfield Tube, Match Rooms & Predictor...'
+      : elapsed < 4.5
+      ? 'Securing Fan Session & Regional Currency...'
+      : 'Pitch Ready. Entering Stadium...';
 
   return (
     <div className="fixed inset-0 z-50 bg-[#090D12] text-[#F1F5F9] flex flex-col justify-between overflow-hidden select-none">
-      {/* Top Header with countdown timer & Skip button */}
+      {/* Top Header with mandatory 5-second loading countdown */}
       <div className="w-full max-w-md mx-auto pt-6 px-5 z-30 flex flex-col gap-3">
         <div className="flex items-center justify-between text-xs font-semibold">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#00E676]" />
-            <span className="text-[#00E676] font-display tracking-wider uppercase text-xs font-bold">
-              Loading FUTFIELD
-            </span>
-          </div>
+          <span className="text-[#00E676] font-display tracking-wider uppercase text-xs font-bold">
+            Preparing FUTFIELD Stadium
+          </span>
 
-          <div className="flex items-center gap-2.5">
-            <span className="font-mono tabular-nums text-white/80 text-xs bg-[#12171F] px-2.5 py-1 rounded-lg border border-white/10">
-              {timeLeft.toFixed(1)}s
-            </span>
-            <button
-              onClick={handleSkip}
-              className="min-h-[44px] flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/10 hover:bg-[#00E676] hover:text-black text-white text-xs font-bold transition-all active:scale-95 border border-white/10"
-              title="Skip intro"
-            >
-              <span>Skip</span>
-              <FastForward className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          <span className="font-mono tabular-nums text-white/90 text-xs bg-[#12171F] px-2.5 py-1 rounded-lg border border-white/10">
+            {timeLeft.toFixed(1)}s
+          </span>
         </div>
 
         {/* 5-second Progress Bar */}
@@ -82,14 +78,13 @@ export const AppSplashIntro: React.FC<AppSplashIntroProps> = ({ onComplete }) =>
 
         {/* Animated Shield Logo Container */}
         <div className="relative group flex flex-col items-center">
-          {/* Orbital pitch rings */}
           <div className="absolute -inset-6 border border-[#00E676]/25 rounded-full animate-orbit-spin pointer-events-none scale-110" />
           <div className="absolute -inset-12 border border-emerald-400/15 rounded-full animate-orbit-spin pointer-events-none scale-125 [animation-direction:reverse]" />
 
           {/* Official App Logo Shield */}
           <div className="relative w-44 h-44 sm:w-52 sm:h-52 rounded-3xl overflow-hidden shadow-[0_18px_50px_rgba(0,230,118,0.28)] border border-[#00E676]/45 bg-[#0D1117] animate-float-glow">
             <img
-              src="/assets/aistudio/IMG-20261106-WA6972_a4f2c4ba.jpg"
+              src="/futfield-logo.jpg"
               alt="FUTFIELD Official App Shield Logo"
               className="w-full h-full object-contain p-1.5"
             />
@@ -99,17 +94,17 @@ export const AppSplashIntro: React.FC<AppSplashIntroProps> = ({ onComplete }) =>
           <div className="w-32 h-5 mt-5 rounded-full bg-[#00E676]/20 blur-md" />
         </div>
 
-        {/* App Title & Pitch engine status */}
+        {/* App Title & Dynamic Engine Progress */}
         <div className="mt-6 text-center space-y-2 z-20">
           <div className="inline-flex items-center gap-1.5 text-[#00E676] text-xs font-bold tracking-[0.14em] uppercase">
             <Activity className="w-3.5 h-3.5 text-[#00E676]" />
-            <span>Official Football Social Network</span>
+            <span>Official Football Fan Community</span>
           </div>
           <h1 className="font-display text-4xl font-extrabold tracking-tight text-white flex items-center justify-center gap-1.5">
             FUT<span className="text-[#00E676]">FIELD</span>
           </h1>
-          <p className="text-xs text-white/70 font-medium max-w-xs mx-auto leading-relaxed">
-            The Pitch Is Primed. Booting 2026 Global Match Engine...
+          <p className="text-xs text-white/75 font-medium max-w-xs mx-auto leading-relaxed">
+            {statusStage}
           </p>
         </div>
       </div>
@@ -118,10 +113,10 @@ export const AppSplashIntro: React.FC<AppSplashIntroProps> = ({ onComplete }) =>
       <div className="w-full max-w-md mx-auto pb-7 px-6 z-30 flex items-center justify-between text-xs text-white/55">
         <div className="flex items-center gap-1.5">
           <Shield className="w-3.5 h-3.5 text-[#00E676]" />
-          <span>v2.4 Match Engine Ready</span>
+          <span>Protected by MediaGuard</span>
         </div>
         <div className="font-mono tabular-nums text-xs font-bold text-[#00E676]">
-          {((elapsed / 5.0) * 100).toFixed(0)}%
+          {Math.round(progressPercent)}%
         </div>
       </div>
     </div>

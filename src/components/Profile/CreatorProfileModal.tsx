@@ -12,13 +12,15 @@ import {
   TrendingUp,
   MapPin,
   Calendar,
-  Sparkles,
   ArrowRight,
   Play,
+  Lock,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { Post, VideoItem } from '../../types/football';
 import { haptics } from '../../utils/haptics';
+import { buildShareUrl } from '../../utils/share';
+import { isCreatorEmail, isCreatorTarget } from '../../utils/creatorGuard';
 
 interface CreatorProfileModalProps {
   isOpen: boolean;
@@ -52,7 +54,8 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
 
   if (!isOpen || !creator) return null;
 
-  const isConnected = isCreatorConnected(creator.handle);
+  const isOfficialLocked = isCreatorTarget(creator.handle) && !isCreatorEmail(user.email);
+  const isConnected = isOfficialLocked ? true : isCreatorConnected(creator.handle);
 
   // Filter posts and videos authored by this specific creator
   const creatorPosts = posts.filter(
@@ -113,7 +116,16 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
                     : 'bg-[#00E676] text-black hover:bg-emerald-400'
                 }`}
               >
-                {isConnected ? '✓ Connected' : '+ Connect'}
+                {isOfficialLocked ? (
+                  <>
+                    <Lock className="w-3 h-3" />
+                    <span>✓ Connected · Official</span>
+                  </>
+                ) : isConnected ? (
+                  '✓ Connected'
+                ) : (
+                  '+ Connect'
+                )}
               </button>
             </div>
           </div>
@@ -203,7 +215,9 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
                           <video
                             src={post.mediaUrl}
                             controls
-                            className="w-full h-full object-cover"
+                            playsInline
+                            preload="auto"
+                            className="w-full max-h-56 object-contain bg-black transform-gpu"
                           />
                         ) : (
                           <img
@@ -232,10 +246,7 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
                         type="button"
                         onClick={() => {
                           const handle = (creator.handle || '@creator').replace(/^@?/, '@');
-                          const url =
-                            typeof window !== 'undefined' && window.location?.origin
-                              ? `${window.location.origin}/profile/${encodeURIComponent(handle)}`
-                              : `https://futfieldsport.com.ng/profile/${encodeURIComponent(handle)}`;
+                          const url = buildShareUrl(`/profile/${encodeURIComponent(handle)}`);
                           openShareSheet({
                             kind: 'post',
                             targetId: post.id,
@@ -277,15 +288,15 @@ export const CreatorProfileModal: React.FC<CreatorProfileModalProps> = ({
                           <img
                             src={vid.thumbnailUrl}
                             alt={vid.title}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                            className="w-full h-full object-contain bg-black transform-gpu"
                           />
                         ) : vid.videoUrl ? (
                           <video
-                            src={`${vid.videoUrl}#t=0.5`}
+                            src={vid.videoUrl}
                             muted
                             playsInline
                             preload="metadata"
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-contain bg-black transform-gpu"
                           />
                         ) : (
                           <div className="w-full h-full bg-slate-900" />
