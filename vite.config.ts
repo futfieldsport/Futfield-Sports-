@@ -14,7 +14,6 @@ export default defineConfig(() => {
     server: {
       hmr: false,
       watch: null,
-      allowedHosts: ['localhost', '.vercel.run'],
     },
   };
 });
