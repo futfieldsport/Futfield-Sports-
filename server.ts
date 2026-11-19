@@ -4,7 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import zlib from 'zlib';
-import 'dotenv/config';
+import './server/load-env.ts';
+import { footballRouter } from './server/api-football.ts';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 import {
@@ -115,6 +116,7 @@ function resolveSafeUploadPath(relPath: string): string | null {
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
+app.use('/api/football', footballRouter);
 
 // -------------------------------------------------------------
 // Global Security Hardening & High-Concurrency Layer (1M+ Users Ready)
@@ -279,10 +281,9 @@ app.use((req, _res, next) => {
 
 // Initialize Backend Supabase Client using environment secrets
 const supabaseUrl =
-  process.env.SUPABASE_URL ||
-  process.env.VITE_SUPABASE_URL ||
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||
-  '';
+  [process.env.SUPABASE_URL, process.env.VITE_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_URL]
+    .map((value) => value?.trim() || '')
+    .find((value) => value.startsWith('https://')) || '';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const hasServiceRole = Boolean(supabaseServiceRoleKey);
 const supabaseKey =
@@ -7625,6 +7626,7 @@ async function ensureViteInitialized() {
         server: {
           middlewareMode: true,
           hmr: false,
+          allowedHosts: ['localhost', '.vercel.run'],
         },
         appType: 'spa',
       });
