@@ -116,7 +116,7 @@ function resolveSafeUploadPath(relPath: string): string | null {
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.use('/api/football', footballRouter);
+app.use('/api/api-football', footballRouter);
 
 // -------------------------------------------------------------
 // Global Security Hardening & High-Concurrency Layer (1M+ Users Ready)
