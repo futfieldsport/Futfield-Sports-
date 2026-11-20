@@ -72,6 +72,7 @@ interface EngineStatusData {
   aiAssistantActive: boolean;
   cachedMatchesCount?: number;
   timestamp: string;
+  apiFootballConfigured?: boolean;
 }
 
 function measureLocalStorageCache(): { formattedSize: string; keyCount: number } {
@@ -187,6 +188,7 @@ export const SettingsPage: React.FC = () => {
   const [engineStatus, setEngineStatus] = useState<EngineStatusData | null>(null);
   const [isPingingEngine, setIsPingingEngine] = useState<boolean>(false);
   const [pingSuccessNotice, setPingSuccessNotice] = useState<string | null>(null);
+  const [apiFootballStatus, setApiFootballStatus] = useState<{ configured: boolean; connected: boolean; message: string } | null>(null);
 
   // Edit Account details inside settings (keep synced with live user updates)
   const [editName, setEditName] = useState(user.name);
@@ -235,6 +237,11 @@ export const SettingsPage: React.FC = () => {
       const clientLatencyMs = Math.max(1, Date.now() - clientStart);
       if (res.ok) {
         const data: EngineStatusData = await res.json();
+        const apiResponse = await fetch('/api/football/api-football/status');
+        const apiStatus = apiResponse.ok
+          ? await apiResponse.json()
+          : { configured: false, connected: false, message: 'API connection status unavailable.' };
+        setApiFootballStatus(apiStatus);
         setEngineStatus({ ...data, clientLatencyMs });
         setPingSuccessNotice(
           `Engine Live (${clientLatencyMs}ms round-trip) · ${data.cachedMatchesCount ?? matches.length} matches cached · ${data.trackedLeaguesCount} leagues.`
@@ -1418,6 +1425,21 @@ export const SettingsPage: React.FC = () => {
                     Tactical xG summaries, win probabilities, and multi-language translation
                   </div>
                 </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200/70 dark:border-white/5 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-white">
+                    <KeyRound className="w-4 h-4 text-[#00E676]" />
+                    API-Football connection
+                  </div>
+                  <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${apiFootballStatus?.connected ? 'bg-emerald-500/10 text-emerald-700 dark:text-[#00E676]' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'}`}>
+                    {apiFootballStatus?.connected ? 'Connected' : apiFootballStatus?.configured ? 'Needs attention' : 'Not configured'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-white/55">
+                  {apiFootballStatus?.message || 'Add API_FOOTBALL_KEY in your project environment variables. The key stays server-side and is never sent to the browser.'}
+                </p>
               </div>
 
               {/* Supported Top 10 Leagues Summary */}

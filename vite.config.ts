@@ -12,6 +12,7 @@ export default defineConfig(() => {
       },
     },
     server: {
+      allowedHosts: ['sb-33hgerzrkaw1.vercel.run'],
       hmr: false,
       watch: null,
     },
