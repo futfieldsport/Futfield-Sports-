@@ -7095,6 +7095,32 @@ if (!IS_SERVERLESS) {
   }, 60_000);
 }
 
+app.get('/api/football/api-football/status', async (_req, res) => {
+  const apiKey = process.env.API_FOOTBALL_KEY?.trim();
+  if (!apiKey) {
+    return res.json({ configured: false, connected: false, message: 'API_FOOTBALL_KEY is not configured.' });
+  }
+
+  try {
+    const response = await fetch('https://v3.football.api-sports.io/status', {
+      headers: { 'x-apisports-key': apiKey },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) {
+      return res.json({ configured: true, connected: false, message: 'API-Football rejected the connection. Check the key and plan.' });
+    }
+    const data = await response.json();
+    const hasErrors = data?.errors && Object.keys(data.errors).length > 0;
+    return res.json({
+      configured: true,
+      connected: !hasErrors,
+      message: hasErrors ? 'API-Football rejected the connection. Check the key and plan.' : 'API-Football connected and responding.',
+    });
+  } catch {
+    return res.json({ configured: true, connected: false, message: 'Could not reach API-Football. Try again shortly.' });
+  }
+});
+
 app.get('/api/football/status', async (req, res) => {
   const startTime = Date.now();
   const fotmobHealthy = Boolean(cachedMatchesResponse && cachedMatchesResponse.count > 0);
