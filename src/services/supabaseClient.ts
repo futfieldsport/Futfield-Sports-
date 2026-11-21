@@ -166,14 +166,14 @@ export async function confirmPasswordReset(
   }
 }
 
-export async function fetchServerPosts(): Promise<Post[]> {
+export async function fetchServerPosts(): Promise<Post[] | null> {
   try {
     const res = await fetch('/api/db/posts');
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = await res.json();
     return Array.isArray(data.posts) ? data.posts : [];
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -205,14 +205,14 @@ export async function syncPostToBackend(post: Post): Promise<boolean> {
   }
 }
 
-export async function fetchServerVideos(): Promise<any[]> {
+export async function fetchServerVideos(): Promise<any[] | null> {
   try {
     const res = await fetch('/api/db/videos');
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = await res.json();
     return Array.isArray(data.videos) ? data.videos : [];
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -410,6 +410,19 @@ export async function addPostCommentOnServer(postId: string, author: any, text: 
     return await res.json();
   } catch {
     return { success: false };
+  }
+}
+
+export async function deletePostCommentOnServer(postId: string, commentId: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `/api/db/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+      { method: 'DELETE' }
+    );
+    const data = await res.json();
+    return Boolean(data.success);
+  } catch {
+    return false;
   }
 }
 
@@ -1296,6 +1309,18 @@ export async function cheerFutubeShout(
   }
 }
 
+export async function deleteFutubeShoutOnServer(shoutId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/futube/shouts/${encodeURIComponent(shoutId)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    return Boolean(data.success);
+  } catch {
+    return false;
+  }
+}
+
 export async function toggleFutubeConnect(
   fanId: string,
   fanzoneId: string
@@ -1441,6 +1466,22 @@ export async function postLiveMatchChat(
     return await res.json();
   } catch {
     return { success: false };
+  }
+}
+
+export async function deleteLiveMatchChatMessage(
+  videoId: string,
+  messageId: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `/api/futube/live-chat/${encodeURIComponent(videoId)}/${encodeURIComponent(messageId)}`,
+      { method: 'DELETE' }
+    );
+    const data = await res.json();
+    return Boolean(data.success);
+  } catch {
+    return false;
   }
 }
 

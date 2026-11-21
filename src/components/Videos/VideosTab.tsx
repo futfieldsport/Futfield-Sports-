@@ -30,6 +30,7 @@ import {
   VolumeX,
   X,
   Zap,
+  Trash2,
 } from 'lucide-react';
 import { useFootball, normalizeVideoItem } from '../../context/FootballContext';
 import {
@@ -39,6 +40,8 @@ import {
 } from '../../types/football';
 import {
   cheerFutubeShout,
+  deleteFutubeShoutOnServer,
+  deleteLiveMatchChatMessage,
   fetchFutubeShouts,
   fetchFutubeVideoDetail,
   fetchFutubeVideos,
@@ -56,6 +59,8 @@ import {
 } from '../../services/supabaseClient';
 import { buildVideoShareUrl, downloadVideoFile } from '../../utils/share';
 import { haptics } from '../../utils/haptics';
+import { isCreatorTarget } from '../../utils/creatorGuard';
+import { SafeImage } from '../Common/SafeImage';
 import { FutfieldTubeLogo, playCrowdCheerSound } from './FutfieldTubeLogo';
 import { FanZoneProfileView } from './FanZoneProfileView';
 import { FanZoneBattlePanel } from './FanZoneBattlePanel';
@@ -127,6 +132,7 @@ export const VideosTab: React.FC = () => {
     addNotification,
     registerBackHandler,
     setPricingModalOpen,
+    deleteVideo,
   } = useFootball();
 
   const isProUser = Boolean(
@@ -152,6 +158,7 @@ export const VideosTab: React.FC = () => {
   const [autoplayNext, setAutoplayNext] = useState<boolean>(true);
   const [descExpanded, setDescExpanded] = useState<boolean>(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [confirmDeleteClipId, setConfirmDeleteClipId] = useState<string | null>(null);
   const [watchDrawer, setWatchDrawer] = useState<
     null | 'shouts' | 'upnext' | 'livechat' | 'pack' | 'report'
   >(null);
@@ -901,7 +908,9 @@ export const VideosTab: React.FC = () => {
     const fanzoneName = kick.fanzoneName || kick.creator?.name || 'FanZone';
     const fanzoneHandle = kick.fanzoneHandle || kick.creator?.handle || '@fanzone';
     const fanzoneAvatar =
-      kick.fanzoneAvatar || kick.creator?.avatar || '/futfield-logo.jpg';
+      kick.fanzoneAvatar ||
+      kick.creator?.avatar ||
+      (isCreatorTarget(fanzoneHandle) ? '/futfield-logo.jpg' : '/default-avatar.jpg');
     const isConnected = Boolean(kick.creator?.isSubscribed);
 
     const goNextKick = () => {
@@ -1221,7 +1230,11 @@ export const VideosTab: React.FC = () => {
     const fanzoneName = clip.fanzoneName || clip.creator?.name || 'FanZone Creator';
     const fanzoneHandle = clip.fanzoneHandle || clip.creator?.handle || '@fanzone';
     const fanzoneAvatar =
-      clip.fanzoneAvatar || clip.creator?.avatar || '/futfield-logo.jpg';
+      clip.fanzoneAvatar ||
+      clip.creator?.avatar ||
+      (fanzoneHandle.toLowerCase() === '@futfield' || fanzoneName.toLowerCase() === 'futfield'
+        ? '/futfield-logo.jpg'
+        : '/default-avatar.jpg');
     const isConnected = Boolean(clip.creator?.isSubscribed);
     const watchesCount = Number(clip.watches ?? clip.views ?? 0);
     const cheersCount = Number(clip.cheers ?? clip.likes ?? 0);
@@ -1825,19 +1838,34 @@ export const VideosTab: React.FC = () => {
                               className="w-8 h-8 rounded-full object-cover cursor-pointer shrink-0"
                             />
                             <div className="flex-1 min-w-0 space-y-1">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  onClick={() => {
-                                    setWatchDrawer(null);
-                                    openFanZone(sh.authorHandle || sh.authorName);
-                                  }}
-                                  className="font-bold text-white cursor-pointer hover:text-[#00C853]"
-                                >
-                                  {sh.authorName}
-                                </span>
-                                <span className="text-[10px] text-white/45">
-                                  {formatRelativeTime(sh.createdAt)}
-                                </span>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    onClick={() => {
+                                      setWatchDrawer(null);
+                                      openFanZone(sh.authorHandle || sh.authorName);
+                                    }}
+                                    className="font-bold text-white cursor-pointer hover:text-[#00C853] truncate"
+                                  >
+                                    {sh.authorName}
+                                  </span>
+                                  <span className="text-[10px] text-white/45 shrink-0">
+                                    {formatRelativeTime(sh.createdAt)}
+                                  </span>
+                                </div>
+                                {(sh.userId === user.id || sh.authorHandle === user.handle || clip.userId === user.id) && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setShouts((prev) => prev.filter((item) => item.id !== sh.id));
+                                      await deleteFutubeShoutOnServer(sh.id);
+                                    }}
+                                    className="text-white/45 hover:text-rose-400 p-1 transition-colors shrink-0"
+                                    title="Delete Shout"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </div>
                               <p className="text-white/85 leading-relaxed">{sh.text}</p>
                               <div className="flex items-center gap-3 pt-0.5 text-[11px]">
@@ -1873,12 +1901,35 @@ export const VideosTab: React.FC = () => {
                                 <div key={rep.id} className="flex items-start gap-2 text-xs">
                                   <CornerDownRight className="w-3.5 h-3.5 text-[#00C853] shrink-0 mt-1" />
                                   <div className="flex-1 bg-white/[0.05] p-2 rounded-xl">
-                                    <span className="font-bold text-white mr-1.5">
-                                      {rep.authorName}
-                                    </span>
-                                    <span className="text-[10px] text-white/45">
-                                      {formatRelativeTime(rep.createdAt)}
-                                    </span>
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div>
+                                        <span className="font-bold text-white mr-1.5">
+                                          {rep.authorName}
+                                        </span>
+                                        <span className="text-[10px] text-white/45">
+                                          {formatRelativeTime(rep.createdAt)}
+                                        </span>
+                                      </div>
+                                      {(rep.userId === user.id || rep.authorHandle === user.handle || clip.userId === user.id) && (
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            setShouts((prev) =>
+                                              prev.map((item) =>
+                                                item.id === sh.id
+                                                  ? { ...item, replies: (item.replies || []).filter((r) => r.id !== rep.id) }
+                                                  : item
+                                              )
+                                            );
+                                            await deleteFutubeShoutOnServer(rep.id);
+                                          }}
+                                          className="text-white/45 hover:text-rose-400 p-0.5 transition-colors"
+                                          title="Delete reply"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      )}
+                                    </div>
                                     <p className="text-white/80 mt-0.5">{rep.text}</p>
                                   </div>
                                 </div>
@@ -1980,18 +2031,33 @@ export const VideosTab: React.FC = () => {
                           </p>
                         ) : (
                           liveChatMessages.map((m) => (
-                            <div key={m.id} className="flex items-start gap-2 text-xs">
-                              <img
-                                src={m.userAvatar || fanzoneAvatar}
-                                alt={m.userName}
-                                className="w-6 h-6 rounded-full object-cover shrink-0"
-                              />
-                              <div>
-                                <span className="font-bold text-[#00C853] mr-1.5">
-                                  {m.userName}:
-                                </span>
-                                <span className="text-white/85">{m.text}</span>
+                            <div key={m.id} className="flex items-start justify-between gap-2 text-xs group">
+                              <div className="flex items-start gap-2 min-w-0">
+                                <img
+                                  src={m.userAvatar || fanzoneAvatar || '/default-avatar.jpg'}
+                                  alt={m.userName}
+                                  className="w-6 h-6 rounded-full object-cover shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <span className="font-bold text-[#00C853] mr-1.5">
+                                    {m.userName}:
+                                  </span>
+                                  <span className="text-white/85 break-words">{m.text}</span>
+                                </div>
                               </div>
+                              {((m as any).userId === user.id || m.userName === user.name || clip.userId === user.id) && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    setLiveChatMessages((prev) => prev.filter((item) => item.id !== m.id));
+                                    await deleteLiveMatchChatMessage(clip.id, m.id);
+                                  }}
+                                  className="text-white/40 hover:text-rose-400 p-1 shrink-0 transition-colors"
+                                  title="Delete message"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
                             </div>
                           ))
                         )}
@@ -2086,7 +2152,22 @@ export const VideosTab: React.FC = () => {
                       ))}
                     </div>
                   </div>
-                  <div className="pt-3 border-t border-white/10">
+                  <div className="pt-3 border-t border-white/10 space-y-2">
+                    {(clip.userId === user.id ||
+                      clip.fanzoneHandle === user.handle ||
+                      clip.creator?.handle === user.handle) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWatchDrawer(null);
+                          setConfirmDeleteClipId(clip.id);
+                        }}
+                        className="w-full min-h-[44px] px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-600 text-rose-200 hover:text-white font-extrabold text-xs flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Delete This Clip Permanently</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -2099,7 +2180,7 @@ export const VideosTab: React.FC = () => {
                       }}
                       className="w-full min-h-[42px] px-4 rounded-2xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs flex items-center justify-center gap-2"
                     >
-                      <span>Manage or Delete Uploads in Content Settings</span>
+                      <span>Manage All Uploads in Content Settings</span>
                     </button>
                   </div>
                 </div>
@@ -2280,7 +2361,11 @@ export const VideosTab: React.FC = () => {
             const fanzoneAvatar =
               clip.fanzoneAvatar ||
               clip.creator?.avatar ||
-              '/futfield-logo.jpg';
+              (isCreatorTarget(fanzoneHandle) ? '/futfield-logo.jpg' : '/default-avatar.jpg');
+            const isOwnerClip =
+              clip.userId === user.id ||
+              clip.fanzoneHandle === user.handle ||
+              clip.creator?.handle === user.handle;
 
             return (
               <article
@@ -2293,10 +2378,11 @@ export const VideosTab: React.FC = () => {
                   className="relative aspect-video bg-black cursor-pointer overflow-hidden flex items-center justify-center"
                 >
                   {clip.thumbnailUrl ? (
-                    <img
+                    <SafeImage
                       src={clip.thumbnailUrl}
                       alt={clip.title}
-                      referrerPolicy="no-referrer"
+                      loading="lazy"
+                      wrapperClassName="w-full h-full flex items-center justify-center bg-black"
                       className="w-full h-full object-contain bg-black transform-gpu"
                     />
                   ) : clip.videoUrl ? (
@@ -2402,13 +2488,28 @@ export const VideosTab: React.FC = () => {
                       </button>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleOpenWatch(clip)}
-                      className="px-2.5 py-1 rounded-full bg-[#00C853]/15 text-[#00C853] font-extrabold text-[11px]"
-                    >
-                      Watch
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {isOwnerClip && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteClipId(clip.id);
+                          }}
+                          className="p-1.5 rounded-full bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white transition-colors"
+                          title="Delete clip"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenWatch(clip)}
+                        className="px-2.5 py-1 rounded-full bg-[#00C853]/15 text-[#00C853] font-extrabold text-[11px]"
+                      >
+                        Watch
+                      </button>
+                    </div>
                   </div>
                 </div>
               </article>
@@ -2428,6 +2529,43 @@ export const VideosTab: React.FC = () => {
           >
             {loadingFeed ? 'Loading more clips...' : 'Load More Clips'}
           </button>
+        </div>
+      )}
+
+      {/* In-App Delete Clip Confirmation Modal */}
+      {confirmDeleteClipId && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-xs rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-white/10 p-5 shadow-2xl space-y-4">
+            <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">
+              Delete Clip Permanently?
+            </h3>
+            <p className="text-xs text-slate-600 dark:text-white/70 leading-relaxed">
+              This will immediately delete the video and clean it from Futfield Tube.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteClipId(null)}
+                className="flex-1 min-h-[44px] py-2 rounded-xl bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-white text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const id = confirmDeleteClipId;
+                  setConfirmDeleteClipId(null);
+                  setWatchDetailVideo(null);
+                  setTubeSubView('feed');
+                  await deleteVideo(id);
+                  setFeedVideos((prev) => prev.filter((item) => item.id !== id));
+                }}
+                className="flex-1 min-h-[44px] py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

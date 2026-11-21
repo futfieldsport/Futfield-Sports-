@@ -53,6 +53,7 @@ import {
 } from '../../utils/mediaUpload';
 import { buildShareUrl, downloadVideoFile } from '../../utils/share';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
+import { SafeImage } from '../Common/SafeImage';
 
 const FEELINGS_LIST = [
   '⚽ Watching Matchday',
@@ -71,6 +72,8 @@ export const HomeTab: React.FC = () => {
     openMatchRoom,
     user,
     addPost,
+    deletePost,
+    deletePostComment,
     toggleLikePost,
     reactToPost,
     toggleSavePost,
@@ -503,11 +506,12 @@ export const HomeTab: React.FC = () => {
 
   const executeDeletePost = async () => {
     if (!confirmDeletePostId) return;
-    await deletePostOnServer(confirmDeletePostId);
+    const idToDelete = confirmDeletePostId;
     setConfirmDeletePostId(null);
+    await deletePost(idToDelete);
     addNotification({
       title: 'Post Deleted',
-      body: 'The post was removed from your feed.',
+      body: 'The post was permanently removed and cleaned from your feed.',
       type: 'system',
     });
   };
@@ -804,28 +808,53 @@ export const HomeTab: React.FC = () => {
                 />
 
                 {uploadStatus === 'uploaded' && mediaUrl && (
-                  <div className="relative rounded-xl overflow-hidden border border-[#00E676]/40 bg-black group">
+                  <div className="rounded-2xl overflow-hidden border border-[#00E676]/40 bg-slate-950 shadow-md">
+                    <div className="px-3 py-1.5 bg-slate-900/95 border-b border-white/10 flex items-center justify-between gap-2 text-[11px] text-white/85">
+                      <span className="font-bold text-[#00E676] truncate">
+                        {mediaType === 'image' ? 'Image Preview Ready' : 'Video Preview Ready'}
+                        {mediaSizeMb ? ` · ${mediaSizeMb} MB` : ''}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            mediaType === 'image'
+                              ? fileInputRef.current?.click()
+                              : videoInputRef.current?.click()
+                          }
+                          className="px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold text-[10px]"
+                        >
+                          Replace
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMediaUrl(null);
+                            setMediaType(null);
+                            setMediaSizeBytes(0);
+                            setMediaSizeMb(0);
+                            setUploadStatus('idle');
+                            setUploadFileName('');
+                            setUploadProgress(0);
+                          }}
+                          className="p-1 rounded-full bg-rose-500/20 hover:bg-rose-500/35 text-rose-300"
+                          title="Remove uploaded media"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
                     {mediaType === 'image' ? (
-                      <img src={mediaUrl} alt="Uploaded post image" className="w-full max-h-52 object-contain bg-black" />
+                      <SafeImage
+                        src={mediaUrl}
+                        alt="Uploaded post image preview"
+                        loading="eager"
+                        wrapperClassName="w-full bg-slate-950 flex items-center justify-center min-h-[160px]"
+                        className="w-full max-h-72 object-contain mx-auto"
+                      />
                     ) : (
-                      <video src={mediaUrl} controls playsInline preload="auto" className="w-full max-h-52 object-contain bg-black transform-gpu" />
+                      <video src={mediaUrl} controls playsInline preload="auto" className="w-full max-h-72 object-contain bg-black transform-gpu" />
                     )}
-
-                    <button
-                      onClick={() => {
-                        setMediaUrl(null);
-                        setMediaType(null);
-                        setMediaSizeBytes(0);
-                        setMediaSizeMb(0);
-                        setUploadStatus('idle');
-                        setUploadFileName('');
-                        setUploadProgress(0);
-                      }}
-                      className="absolute top-2 right-2 p-1.5 rounded-full bg-black/75 hover:bg-black text-white hover:text-rose-400 transition-colors shadow-md z-10"
-                      title="Remove uploaded media"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
                   </div>
                 )}
               </div>
@@ -1202,21 +1231,21 @@ export const HomeTab: React.FC = () => {
                 {(post.imageUrl || (post.mediaType === 'image' && post.mediaUrl)) && (
                   <div
                     onClick={() => setFullscreenImage(post.imageUrl || post.mediaUrl || null)}
-                    className="relative rounded-2xl overflow-hidden aspect-[4/3] bg-black/10 dark:bg-black/40 border border-slate-100 dark:border-white/5 cursor-pointer group"
+                    className="relative rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#0B1018] border border-slate-200/80 dark:border-white/10 cursor-pointer group"
                   >
-                    <img
+                    <SafeImage
                       src={post.imageUrl || post.mediaUrl}
                       alt={`football fan post photo by ${post.author?.name || 'Supporter'}`}
                       loading="lazy"
-                      decoding="async"
-                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
+                      wrapperClassName="w-full min-h-[180px] flex items-center justify-center bg-slate-100 dark:bg-[#0B1018]"
+                      className="w-full max-h-[500px] object-contain mx-auto"
                     />
                     {post.mediaSizeMb ? (
                       <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/75 text-[10px] font-mono tabular-nums font-bold text-[#00E676] border border-[#00E676]/30">
                         {post.mediaSizeMb} MB
                       </span>
                     ) : null}
-                    <div className="absolute bottom-2.5 right-2.5 p-1.5 rounded-full bg-black/65 text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute bottom-2.5 right-2.5 p-2 rounded-full bg-black/70 text-white opacity-80 group-hover:opacity-100 transition-opacity shadow-md">
                       <Maximize2 className="w-3.5 h-3.5" />
                     </div>
                   </div>
@@ -1456,22 +1485,34 @@ export const HomeTab: React.FC = () => {
                             <div key={comment.id} className="space-y-1.5">
                               <div className="flex items-start gap-2">
                                 <img
-                                  src={comment.author?.avatar || user.avatar}
+                                  src={comment.author?.avatar || '/default-avatar.jpg'}
                                   alt={`${comment.author?.name || 'Supporter'} football fan comment avatar`}
                                   loading="lazy"
                                   decoding="async"
                                   onClick={() => navigateToProfile(comment.author?.handle || comment.author?.name || 'Supporter')}
-                                  className="w-6 h-6 rounded-full object-cover shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                                  className="w-6 h-6 rounded-full object-cover shrink-0 cursor-pointer hover:opacity-80 transition-opacity bg-slate-200 dark:bg-white/10"
                                 />
                                 <div className="flex-1 bg-slate-50 dark:bg-white/5 p-2 rounded-xl text-xs space-y-0.5">
-                                  <div className="flex items-center justify-between">
+                                  <div className="flex items-center justify-between gap-2">
                                     <span
                                       onClick={() => navigateToProfile(comment.author?.handle || comment.author?.name || 'Supporter')}
                                       className="font-bold text-[11px] text-slate-900 dark:text-white cursor-pointer hover:underline"
                                     >
                                       {comment.author?.name || 'Supporter'}
                                     </span>
-                                    <span className="text-[9px] text-slate-400">{comment.timestamp}</span>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <span className="text-[9px] text-slate-400">{comment.timestamp}</span>
+                                      {(comment.author?.handle === user.handle || post.userId === user.id || post.author?.handle === user.handle) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => deletePostComment(post.id, comment.id)}
+                                          className="text-slate-400 hover:text-rose-500 p-0.5 transition-colors"
+                                          title="Delete comment"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                   <p className="text-[11px] text-slate-700 dark:text-white/80">
                                     {comment.text}
@@ -1502,11 +1543,23 @@ export const HomeTab: React.FC = () => {
                                     <div key={reply.id} className="flex items-start gap-2">
                                       <CornerDownRight className="w-3 h-3 text-slate-400 shrink-0 mt-1" />
                                       <div className="flex-1 bg-slate-100/70 dark:bg-white/10 p-2 rounded-xl text-[11px]">
-                                        <div className="flex items-center justify-between">
+                                        <div className="flex items-center justify-between gap-2">
                                           <span className="font-bold text-[10px] text-slate-900 dark:text-white">
                                             {reply.author?.name || 'Supporter'}
                                           </span>
-                                          <span className="text-[9px] text-slate-400">{reply.timestamp}</span>
+                                          <div className="flex items-center gap-2 shrink-0">
+                                            <span className="text-[9px] text-slate-400">{reply.timestamp}</span>
+                                            {(reply.author?.handle === user.handle || post.userId === user.id || post.author?.handle === user.handle) && (
+                                              <button
+                                                type="button"
+                                                onClick={() => deletePostComment(post.id, reply.id)}
+                                                className="text-slate-400 hover:text-rose-500 p-0.5 transition-colors"
+                                                title="Delete reply"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            )}
+                                          </div>
                                         </div>
                                         <p className="text-slate-700 dark:text-white/80">{reply.text}</p>
                                       </div>
@@ -1565,15 +1618,22 @@ export const HomeTab: React.FC = () => {
       {fullscreenImage && (
         <div
           onClick={() => setFullscreenImage(null)}
-          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 cursor-pointer"
+          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 cursor-pointer"
         >
-          <div className="relative max-w-lg max-h-[90vh]">
-            <img src={fullscreenImage} alt="Fullscreen viewer" className="w-full h-full object-contain rounded-2xl" />
+          <div className="relative max-w-3xl w-full max-h-[90vh] flex items-center justify-center">
+            <SafeImage
+              src={fullscreenImage}
+              alt="Fullscreen post photo viewer"
+              loading="eager"
+              wrapperClassName="w-full flex items-center justify-center"
+              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
+            />
             <button
+              type="button"
               onClick={() => setFullscreenImage(null)}
-              className="absolute top-3 right-3 p-2 rounded-full bg-black/70 text-white"
+              className="absolute top-3 right-3 min-h-[44px] min-w-[44px] p-2.5 rounded-full bg-black/75 hover:bg-black text-white flex items-center justify-center shadow-lg"
             >
-              <X className="w-4 h-4" />
+              <X className="w-5 h-5" />
             </button>
           </div>
         </div>

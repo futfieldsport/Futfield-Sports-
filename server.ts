@@ -40,7 +40,8 @@ const IS_SERVERLESS = Boolean(
     process.env.LAMBDA_TASK_ROOT
 );
 
-const DEFAULT_AVATAR = '/futfield-logo.jpg';
+const DEFAULT_AVATAR = '/default-avatar.jpg';
+const CREATOR_AVATAR = '/futfield-logo.jpg';
 const DEFAULT_BANNER = '/og-image.jpg';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isValidUuid(val: any): boolean {
@@ -489,7 +490,7 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
         email: normalizedEmail,
         name: displayName,
         handle: baseHandle,
-        avatar: DEFAULT_AVATAR,
+        avatar: isCreatorAccount ? CREATOR_AVATAR : DEFAULT_AVATAR,
         bio: isCreatorAccount
           ? 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽'
           : `${favoriteClub || 'Football'} supporter on FUTFIELD ⚽`,
@@ -583,7 +584,7 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
     email: normalizedEmail,
     name: displayName,
     handle: baseHandle,
-    avatar: DEFAULT_AVATAR,
+    avatar: isCreatorAccount ? CREATOR_AVATAR : DEFAULT_AVATAR,
     bio: isCreatorAccount
       ? 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽'
       : `${favoriteClub || 'Football'} supporter on FUTFIELD ⚽`,
@@ -672,7 +673,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             email: data.user.email,
             name: profData.full_name || profData.name || data.user.user_metadata?.name || normalizedEmail.split('@')[0],
             handle: profData.username || profData.handle || data.user.user_metadata?.handle || `@${normalizedEmail.split('@')[0]}`,
-            avatar: profData.avatar_url || profData.avatar || DEFAULT_AVATAR,
+            avatar: profData.avatar_url || profData.avatar || (isCreatorAccount ? CREATOR_AVATAR : DEFAULT_AVATAR),
             bio: profData.bio || 'Football enthusiast on FUTFIELD ⚽',
             favoriteClub: profData.favorite_club || data.user.user_metadata?.favorite_club || 'Not Set',
             favoriteClubCrest: profData.favorite_club_logo || '⚽',
@@ -705,7 +706,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         email: data.user.email,
         name: data.user.user_metadata?.name || normalizedEmail.split('@')[0],
         handle: data.user.user_metadata?.handle || `@${normalizedEmail.split('@')[0]}`,
-        avatar: DEFAULT_AVATAR,
+        avatar: isCreatorAccount ? CREATOR_AVATAR : DEFAULT_AVATAR,
         bio: 'Football enthusiast on FUTFIELD',
         favoriteClub: data.user.user_metadata?.favorite_club || 'Not Set',
         favoriteClubCrest: '⚽',
@@ -770,7 +771,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     email: normalizedEmail,
     name: isCreatorAccount ? CREATOR_NAME : normalizedEmail.split('@')[0],
     handle: isCreatorAccount ? CREATOR_HANDLE : `@${normalizedEmail.split('@')[0]}`,
-    avatar: DEFAULT_AVATAR,
+    avatar: isCreatorAccount ? CREATOR_AVATAR : DEFAULT_AVATAR,
     bio: isCreatorAccount
       ? 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽'
       : 'Football fan on FUTFIELD ⚽',
@@ -850,7 +851,7 @@ app.post('/api/auth/forgot-password', resetPasswordLimiter, async (req, res) => 
   let supabaseEmailSent = false;
   if (supabaseBackendClient) {
     try {
-      const origin = String(req.headers.origin || 'https://futfieldsports.com.ng').replace(/\/$/, '');
+      const origin = String(req.headers.origin || process.env.APP_URL || 'https://futfieldsport.com.ng').replace(/\/$/, '');
       const { error } = await supabaseBackendClient.auth.resetPasswordForEmail(normalizedEmail, {
         redirectTo: `${origin}/auth/reset-password`,
       });
@@ -1192,7 +1193,7 @@ function seedOfficialCreatorProfile() {
       email: CREATOR_EMAIL,
       name: CREATOR_NAME,
       handle: CREATOR_HANDLE,
-      avatar: DEFAULT_AVATAR,
+      avatar: CREATOR_AVATAR,
       bio: 'Official Futfield Main Account · Live scores, FanZone clips & global football community ⚽',
       favoriteClub: 'FUTFIELD Official',
       favoriteClubCrest: '⚽',
@@ -1207,6 +1208,8 @@ function seedOfficialCreatorProfile() {
     inMemoryProfiles[CREATOR_ID] = creatorProf;
     inMemoryProfiles[CREATOR_HANDLE] = creatorProf;
     inMemoryProfiles[CREATOR_EMAIL] = creatorProf;
+  } else if (!inMemoryProfiles[CREATOR_ID].avatar || inMemoryProfiles[CREATOR_ID].avatar === DEFAULT_AVATAR) {
+    inMemoryProfiles[CREATOR_ID].avatar = CREATOR_AVATAR;
   }
 }
 seedOfficialCreatorProfile();
@@ -1299,16 +1302,41 @@ interface ActiveSubscription {
 const activeSubscriptionsStore: Record<string, ActiveSubscription> = {};
 const subscriptionExpiryAlerts: Record<string, any[]> = {};
 
+function sanitizeStoredDomainAndAssets<T>(input: T): T {
+  if (typeof input === 'string') {
+    let out = input
+      .replace(/https?:\/\/(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)/gi, 'https://futfieldsport.com.ng')
+      .replace(/futfieldsports\.com\.ng/gi, 'futfieldsport.com.ng');
+    if (out.includes('/assets/aistudio/')) {
+      out = out.includes('banner') ? DEFAULT_BANNER : DEFAULT_AVATAR;
+    }
+    return out as unknown as T;
+  }
+  if (Array.isArray(input)) {
+    return input.map((item) => sanitizeStoredDomainAndAssets(item)) as unknown as T;
+  }
+  if (input && typeof input === 'object') {
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(input as Record<string, any>)) {
+      res[k] = sanitizeStoredDomainAndAssets(v);
+    }
+    return res as T;
+  }
+  return input;
+}
+
 // Hydrate persisted uploads & feed data on boot
 try {
   if (fs.existsSync(MEDIA_REGISTRY_FILE)) {
     const rawMedia = JSON.parse(fs.readFileSync(MEDIA_REGISTRY_FILE, 'utf-8'));
     if (Array.isArray(rawMedia)) {
-      mediaRegistry.push(...rawMedia);
+      mediaRegistry.push(...sanitizeStoredDomainAndAssets(rawMedia));
     }
   }
   if (fs.existsSync(FEED_STORE_FILE)) {
-    const rawFeed = JSON.parse(fs.readFileSync(FEED_STORE_FILE, 'utf-8'));
+    const rawFeedText = fs.readFileSync(FEED_STORE_FILE, 'utf-8');
+    const hadLegacyRefs = /futfieldsports\.com\.ng|futfield\.com|fitfield\.com|\/assets\/aistudio\//i.test(rawFeedText);
+    const rawFeed = sanitizeStoredDomainAndAssets(JSON.parse(rawFeedText));
     if (Array.isArray(rawFeed?.posts)) {
       inMemoryPosts.push(
         ...rawFeed.posts
@@ -1319,16 +1347,21 @@ try {
             const name = String(p.author?.name || '').toLowerCase();
             return !pid.startsWith('post_test_') && handle !== '@testfan' && name !== 'test fan';
           })
-          .map((p: any) => ({
-            ...p,
-            author: {
-              name: p?.author?.name || 'Football Supporter',
-              handle: p?.author?.handle || '@fan',
-              avatar: p?.author?.avatar || DEFAULT_AVATAR,
-              clubBadge: p?.author?.clubBadge || p?.clubTag || '⚽',
-              isVerified: Boolean(p?.author?.isVerified),
-            },
-          }))
+          .map((p: any) => {
+            const isCreator = isCreatorTarget(p?.userId) || isCreatorTarget(p?.author?.handle);
+            const rawAvatar = p?.author?.avatar || '';
+            const resolvedAvatar = !rawAvatar || (!isCreator && rawAvatar === CREATOR_AVATAR) ? DEFAULT_AVATAR : rawAvatar;
+            return {
+              ...p,
+              author: {
+                name: p?.author?.name || 'Football Supporter',
+                handle: p?.author?.handle || '@fan',
+                avatar: isCreator ? CREATOR_AVATAR : resolvedAvatar,
+                clubBadge: p?.author?.clubBadge || p?.clubTag || '⚽',
+                isVerified: Boolean(p?.author?.isVerified),
+              },
+            };
+          })
       );
     }
     if (Array.isArray(rawFeed?.videos)) {
@@ -1341,17 +1374,23 @@ try {
             const url = String(v.videoUrl || '').toLowerCase();
             return vid !== 'vid_1794743322269' && !(title === 'training highlight' && url.includes('/uploads/videos/sample.mp4'));
           })
-          .map((v: any) => ({
-            ...v,
-            creator: {
-              name: v?.creator?.name || 'Pitch Creator',
-              handle: v?.creator?.handle || '@creator',
-              subscribers: v?.creator?.subscribers || '1 supporter',
-              avatar: v?.creator?.avatar || DEFAULT_AVATAR,
-              isVerified: Boolean(v?.creator?.isVerified),
-              isSubscribed: Boolean(v?.creator?.isSubscribed),
-            },
-          }))
+          .map((v: any) => {
+            const isCreator = isCreatorTarget(v?.userId) || isCreatorTarget(v?.fanzoneHandle) || isCreatorTarget(v?.creator?.handle);
+            const rawAvatar = v?.fanzoneAvatar || v?.creator?.avatar || '';
+            const resolvedAvatar = !rawAvatar || (!isCreator && rawAvatar === CREATOR_AVATAR) ? DEFAULT_AVATAR : rawAvatar;
+            return {
+              ...v,
+              fanzoneAvatar: isCreator ? CREATOR_AVATAR : resolvedAvatar,
+              creator: {
+                name: v?.creator?.name || 'Pitch Creator',
+                handle: v?.creator?.handle || '@creator',
+                subscribers: v?.creator?.subscribers || '1 supporter',
+                avatar: isCreator ? CREATOR_AVATAR : resolvedAvatar,
+                isVerified: Boolean(v?.creator?.isVerified),
+                isSubscribed: Boolean(v?.creator?.isSubscribed),
+              },
+            };
+          })
       );
     }
     if (Array.isArray(rawFeed?.postComments)) inMemoryPostComments.push(...rawFeed.postComments);
@@ -1382,7 +1421,15 @@ try {
       Object.assign(inMemoryAuthCredentials, rawFeed.authCredentials);
     }
     if (rawFeed?.profiles && typeof rawFeed.profiles === 'object') {
-      Object.assign(inMemoryProfiles, rawFeed.profiles);
+      for (const [k, prof] of Object.entries(rawFeed.profiles as Record<string, any>)) {
+        if (prof && typeof prof === 'object') {
+          const isCreator = isCreatorTarget(prof.id) || isCreatorTarget(prof.handle) || isCreatorEmail(prof.email);
+          if (!isCreator && prof.avatar === CREATOR_AVATAR) {
+            prof.avatar = DEFAULT_AVATAR;
+          }
+          inMemoryProfiles[k] = prof;
+        }
+      }
       seedOfficialCreatorProfile();
     }
     if (Array.isArray(rawFeed?.predictorPicks)) {
@@ -1391,11 +1438,16 @@ try {
     if (Array.isArray(rawFeed?.arenaPolls) && rawFeed.arenaPolls.length > 0) {
       inMemoryArenaPolls.splice(0, inMemoryArenaPolls.length, ...rawFeed.arenaPolls);
     }
+    if (hadLegacyRefs) {
+      setImmediate(() => {
+        flushStorePersist().catch(() => {});
+      });
+    }
   }
   if (fs.existsSync(SUPPORT_TICKETS_FILE)) {
     const rawTickets = JSON.parse(fs.readFileSync(SUPPORT_TICKETS_FILE, 'utf-8'));
     if (Array.isArray(rawTickets)) {
-      inMemorySupportTickets.push(...rawTickets);
+      inMemorySupportTickets.push(...sanitizeStoredDomainAndAssets(rawTickets));
     }
   }
 } catch (err) {
@@ -1723,7 +1775,7 @@ app.get('/api/db/posts', async (req, res) => {
   if (clubTag) {
     results = results.filter(p => p.clubTag === clubTag);
   }
-  return res.json({ posts: results });
+  return res.json({ posts: sanitizeStoredDomainAndAssets(results) });
 });
 
 app.post('/api/db/posts', async (req, res) => {
@@ -1813,24 +1865,81 @@ app.put('/api/db/posts/:id', async (req, res) => {
   return res.json({ success: true, id, content });
 });
 
+function deleteUploadFileIfLocal(fileUrl?: string | null) {
+  if (!fileUrl || typeof fileUrl !== 'string') return;
+  try {
+    let relPath = '';
+    if (fileUrl.startsWith('/uploads/')) {
+      relPath = fileUrl.replace(/^\/uploads\//, '');
+    } else if (fileUrl.includes('/uploads/')) {
+      relPath = fileUrl.split('/uploads/')[1]?.split('?')[0] || '';
+    }
+    if (relPath) {
+      const targetPath = path.join(UPLOADS_DIR, relPath);
+      if (targetPath.startsWith(UPLOADS_DIR) && fs.existsSync(targetPath)) {
+        fs.unlinkSync(targetPath);
+      }
+    }
+  } catch {}
+}
+
+function purgeMediaRegistryByUrls(urls: Array<string | null | undefined>) {
+  const validUrls = urls.filter((u): u is string => typeof u === 'string' && u.length > 0);
+  if (validUrls.length === 0) return;
+  for (let i = mediaRegistry.length - 1; i >= 0; i--) {
+    const entry = mediaRegistry[i];
+    if (entry && validUrls.some(u => entry.url === u || (entry.url && u.includes(entry.url)))) {
+      mediaRegistry.splice(i, 1);
+    }
+  }
+}
+
 app.delete('/api/db/posts/:id', async (req, res) => {
   const { id } = req.params;
 
+  const idx = inMemoryPosts.findIndex(p => p.id === id);
+  const removed = idx !== -1 ? inMemoryPosts[idx] : null;
+  if (idx !== -1) {
+    inMemoryPosts.splice(idx, 1);
+  }
+
+  if (removed) {
+    const mediaUrls = [removed.imageUrl, removed.videoUrl, removed.mediaUrl, removed.thumbnailUrl];
+    mediaUrls.forEach(deleteUploadFileIfLocal);
+    purgeMediaRegistryByUrls(mediaUrls);
+    const authorId = removed.userId || removed.author?.handle;
+    if (authorId && inMemoryProfiles[authorId]) {
+      inMemoryProfiles[authorId].postsCount = Math.max(0, Number(inMemoryProfiles[authorId].postsCount || 0) - 1);
+    }
+  }
+
+  for (let i = inMemoryPostComments.length - 1; i >= 0; i--) {
+    if (inMemoryPostComments[i]?.postId === id) inMemoryPostComments.splice(i, 1);
+  }
+  for (let i = inMemoryPostLikes.length - 1; i >= 0; i--) {
+    if (inMemoryPostLikes[i]?.postId === id) inMemoryPostLikes.splice(i, 1);
+  }
+  for (let i = inMemoryPostReactions.length - 1; i >= 0; i--) {
+    if (inMemoryPostReactions[i]?.postId === id) inMemoryPostReactions.splice(i, 1);
+  }
+  for (let i = inMemoryPostBookmarks.length - 1; i >= 0; i--) {
+    if (inMemoryPostBookmarks[i]?.postId === id) inMemoryPostBookmarks.splice(i, 1);
+  }
+
   if (supabaseBackendClient) {
     try {
-      await supabaseBackendClient.from('posts').delete().eq('id', id);
-      await supabaseBackendClient.from('post_likes').delete().eq('post_id', id);
       await supabaseBackendClient.from('post_comments').delete().eq('post_id', id);
+      await supabaseBackendClient.from('post_likes').delete().eq('post_id', id);
+      await supabaseBackendClient.from('post_bookmarks').delete().eq('post_id', id);
+      await supabaseBackendClient.from('posts').delete().eq('id', id);
     } catch (err: any) {
       console.warn('[Backend] Post delete note:', err?.message);
     }
   }
 
-  const idx = inMemoryPosts.findIndex(p => p.id === id);
-  if (idx !== -1) {
-    inMemoryPosts.splice(idx, 1);
-  }
-
+  await flushStorePersist();
+  broadcastToGlobalFeed('post_deleted', { postId: id });
+  broadcastToGlobalFeed('analytics_summary', computeRealtimeAnalytics());
   return res.json({ success: true, deletedId: id });
 });
 
@@ -2011,8 +2120,53 @@ app.post('/api/db/posts/:id/comments', async (req, res) => {
     }
   }
 
+  scheduleStorePersist();
   broadcastToGlobalFeed('comment_post', { postId: id, comment: newComment });
   return res.json({ success: true, comment: newComment });
+});
+
+app.delete('/api/db/posts/:postId/comments/:commentId', async (req, res) => {
+  const { postId, commentId } = req.params;
+
+  let removedCount = 0;
+  for (let i = inMemoryPostComments.length - 1; i >= 0; i--) {
+    const c = inMemoryPostComments[i];
+    if (c?.id === commentId && (!postId || c.postId === postId)) {
+      removedCount += 1 + (Array.isArray(c.replies) ? c.replies.length : 0);
+      inMemoryPostComments.splice(i, 1);
+    } else if (c && Array.isArray(c.replies)) {
+      const rIdx = c.replies.findIndex((r: any) => r.id === commentId);
+      if (rIdx !== -1) {
+        c.replies.splice(rIdx, 1);
+        removedCount += 1;
+      }
+    }
+  }
+
+  const post = inMemoryPosts.find(p => p.id === postId);
+  if (post) {
+    if (Array.isArray(post.commentsList)) {
+      post.commentsList = post.commentsList
+        .filter((c: any) => c.id !== commentId)
+        .map((c: any) =>
+          Array.isArray(c.replies)
+            ? { ...c, replies: c.replies.filter((r: any) => r.id !== commentId) }
+            : c
+        );
+    }
+    post.commentsCount = Math.max(0, Number(post.commentsCount || 0) - Math.max(1, removedCount));
+  }
+
+  if (supabaseBackendClient) {
+    try {
+      await supabaseBackendClient.from('post_comments').delete().eq('parent_id', commentId);
+      await supabaseBackendClient.from('post_comments').delete().eq('id', commentId);
+    } catch {}
+  }
+
+  await flushStorePersist();
+  broadcastToGlobalFeed('post_comment_deleted', { postId, commentId });
+  return res.json({ success: true, postId, commentId });
 });
 
 app.post('/api/db/posts/:id/share', async (req, res) => {
@@ -2123,7 +2277,7 @@ app.get('/api/db/videos', async (req, res) => {
   if (kind === 'short' || kind === 'video') {
     results = results.filter(v => (v.videoKind || (v.aspectRatio === '16:9' ? 'video' : 'short')) === kind);
   }
-  return res.json({ videos: results });
+  return res.json({ videos: sanitizeStoredDomainAndAssets(results) });
 });
 
 app.post('/api/db/videos', async (req, res) => {
@@ -2245,33 +2399,66 @@ app.post('/api/db/videos', async (req, res) => {
   });
 });
 
-app.delete('/api/db/videos/:id', async (req, res) => {
-  const { id } = req.params;
+async function deleteVideoCompletely(id: string) {
   const idx = inMemoryVideos.findIndex(v => v.id === id);
   const removed = idx !== -1 ? inMemoryVideos[idx] : null;
   if (idx !== -1) {
     inMemoryVideos.splice(idx, 1);
   }
   if (removed) {
-    for (const field of [removed.videoUrl, removed.thumbnailUrl]) {
-      if (typeof field === 'string' && field.startsWith('/uploads/')) {
-        try {
-          const targetPath = path.join(UPLOADS_DIR, field.replace(/^\/uploads\//, ''));
-          if (targetPath.startsWith(UPLOADS_DIR) && fs.existsSync(targetPath)) {
-            fs.unlinkSync(targetPath);
-          }
-        } catch {}
-      }
+    const mediaUrls = [removed.videoUrl, removed.thumbnailUrl, removed.mediaUrl];
+    mediaUrls.forEach(deleteUploadFileIfLocal);
+    purgeMediaRegistryByUrls(mediaUrls);
+  }
+  for (let i = inMemoryVideoComments.length - 1; i >= 0; i--) {
+    if (inMemoryVideoComments[i]?.videoId === id) inMemoryVideoComments.splice(i, 1);
+  }
+  for (let i = inMemoryVideoLikes.length - 1; i >= 0; i--) {
+    if (inMemoryVideoLikes[i]?.videoId === id) inMemoryVideoLikes.splice(i, 1);
+  }
+  for (let i = inMemoryVideoReactions.length - 1; i >= 0; i--) {
+    if (inMemoryVideoReactions[i]?.videoId === id) inMemoryVideoReactions.splice(i, 1);
+  }
+  for (let i = inMemoryFutubeShouts.length - 1; i >= 0; i--) {
+    if (inMemoryFutubeShouts[i]?.videoId === id) inMemoryFutubeShouts.splice(i, 1);
+  }
+  for (let i = inMemoryFutubeCheers.length - 1; i >= 0; i--) {
+    if (inMemoryFutubeCheers[i]?.videoId === id) inMemoryFutubeCheers.splice(i, 1);
+  }
+  for (let i = inMemoryFutubeBoos.length - 1; i >= 0; i--) {
+    if (inMemoryFutubeBoos[i]?.videoId === id) inMemoryFutubeBoos.splice(i, 1);
+  }
+  for (let i = inMemoryFutubeWatchHistory.length - 1; i >= 0; i--) {
+    if (inMemoryFutubeWatchHistory[i]?.videoId === id) inMemoryFutubeWatchHistory.splice(i, 1);
+  }
+  for (let i = inMemoryFutubeReports.length - 1; i >= 0; i--) {
+    if (inMemoryFutubeReports[i]?.videoId === id) inMemoryFutubeReports.splice(i, 1);
+  }
+  for (const pack of inMemoryFutubePacks) {
+    if (Array.isArray(pack.videoIds)) {
+      pack.videoIds = pack.videoIds.filter((vid: string) => vid !== id);
     }
   }
+  delete inMemoryFutubeLiveChats[id];
+
   if (supabaseBackendClient) {
     try {
+      await supabaseBackendClient.from('futube_shouts').delete().eq('video_id', id);
+      await supabaseBackendClient.from('futube_cheers').delete().eq('video_id', id);
+      await supabaseBackendClient.from('futube_watch_history').delete().eq('video_id', id);
+      await supabaseBackendClient.from('futube_videos').delete().eq('id', id);
       await supabaseBackendClient.from('videos').delete().eq('id', id);
     } catch {}
   }
-  scheduleStorePersist();
+
+  await flushStorePersist();
   broadcastToGlobalFeed('video_deleted', { videoId: id });
   broadcastToGlobalFeed('analytics_summary', computeRealtimeAnalytics());
+}
+
+app.delete('/api/db/videos/:id', async (req, res) => {
+  const { id } = req.params;
+  await deleteVideoCompletely(id);
   return res.json({ success: true, deletedId: id });
 });
 
@@ -2657,7 +2844,7 @@ app.get('/api/futube/videos', async (req, res) => {
         for (const row of data) {
           if (!mergedMap.has(row.id)) {
             const durSec = Number(row.duration_seconds || 30);
-            mergedMap.set(row.id, {
+            mergedMap.set(row.id, sanitizeStoredDomainAndAssets({
               id: row.id,
               userId: row.user_id,
               fanzoneId: row.fanzone_id,
@@ -2685,7 +2872,7 @@ app.get('/api/futube/videos', async (req, res) => {
               aspectRatio: row.is_quick_kick ? '9:16' : '16:9',
               videoKind: row.is_quick_kick ? 'short' : 'video',
               createdAt: row.created_at,
-            });
+            }));
           }
         }
       }
@@ -2970,29 +3157,7 @@ app.post('/api/futube/videos', async (req, res) => {
 
 app.delete('/api/futube/videos/:id', async (req, res) => {
   const { id } = req.params;
-  const idx = inMemoryVideos.findIndex(v => v.id === id);
-  const removed = idx !== -1 ? inMemoryVideos[idx] : null;
-  if (idx !== -1) inMemoryVideos.splice(idx, 1);
-
-  if (removed) {
-    for (const field of [removed.videoUrl, removed.thumbnailUrl]) {
-      if (typeof field === 'string' && field.startsWith('/uploads/')) {
-        try {
-          const targetPath = path.join(UPLOADS_DIR, field.replace(/^\/uploads\//, ''));
-          if (targetPath.startsWith(UPLOADS_DIR) && fs.existsSync(targetPath)) {
-            fs.unlinkSync(targetPath);
-          }
-        } catch {}
-      }
-    }
-  }
-  if (supabaseBackendClient) {
-    try {
-      await supabaseBackendClient.from('futube_videos').delete().eq('id', id);
-    } catch {}
-  }
-  scheduleStorePersist();
-  broadcastToGlobalFeed('video_deleted', { videoId: id });
+  await deleteVideoCompletely(id);
   return res.json({ success: true, deletedId: id });
 });
 
@@ -3252,6 +3417,33 @@ app.post('/api/futube/shouts/:shoutId/cheer', (req, res) => {
   }
   scheduleStorePersist();
   return res.json({ success: true, hasCheered, cheers: shout.cheers });
+});
+
+app.delete('/api/futube/shouts/:shoutId', async (req, res) => {
+  const { shoutId } = req.params;
+  let videoId = '';
+  for (let i = inMemoryFutubeShouts.length - 1; i >= 0; i--) {
+    const s = inMemoryFutubeShouts[i];
+    if (s?.id === shoutId || s?.parentId === shoutId) {
+      if (!videoId && s?.videoId) videoId = s.videoId;
+      inMemoryFutubeShouts.splice(i, 1);
+    }
+  }
+  if (videoId) {
+    const v = inMemoryVideos.find(item => item.id === videoId);
+    if (v) {
+      v.shoutsCount = inMemoryFutubeShouts.filter(s => s.videoId === videoId).length;
+      v.commentsCount = v.shoutsCount;
+    }
+  }
+  if (supabaseBackendClient) {
+    try {
+      await supabaseBackendClient.from('futube_shouts').delete().eq('parent_id', shoutId);
+      await supabaseBackendClient.from('futube_shouts').delete().eq('id', shoutId);
+    } catch {}
+  }
+  await flushStorePersist();
+  return res.json({ success: true, deletedId: shoutId, videoId });
 });
 
 app.post('/api/futube/connects/toggle', async (req, res) => {
@@ -3645,6 +3837,17 @@ app.post('/api/futube/live-chat/:videoId', (req, res) => {
   return res.json({ success: true, message: msg });
 });
 
+app.delete('/api/futube/live-chat/:videoId/:messageId', async (req, res) => {
+  const { videoId, messageId } = req.params;
+  if (Array.isArray(inMemoryFutubeLiveChats[videoId])) {
+    inMemoryFutubeLiveChats[videoId] = inMemoryFutubeLiveChats[videoId].filter(
+      (m: any) => m.id !== messageId
+    );
+  }
+  await flushStorePersist();
+  return res.json({ success: true, deletedId: messageId });
+});
+
 // -------------------------------------------------------------
 // Real Profiles & Follows Endpoints
 // -------------------------------------------------------------
@@ -3694,7 +3897,7 @@ app.get('/api/db/profiles/:id', async (req, res) => {
       }
       const { data: dbProf } = await query.single();
       if (dbProf) {
-        existingProfile = {
+        existingProfile = sanitizeStoredDomainAndAssets({
           id: dbProf.id,
           name: dbProf.full_name || dbProf.name || id,
           handle: dbProf.username || (id.startsWith('@') ? id : `@${id}`),
@@ -3705,7 +3908,7 @@ app.get('/api/db/profiles/:id', async (req, res) => {
           location: dbProf.location || '',
           website: dbProf.website || '',
           joinedAt: dbProf.joined_at ? new Date(dbProf.joined_at).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 'November 2026',
-        };
+        });
       }
     } catch {}
   }
@@ -4250,26 +4453,30 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
     const diskPath = path.join(UPLOADS_DIR, folder, safeName);
 
     fs.writeFileSync(diskPath, buffer);
-    let finalUrl = `/uploads/${folder}/${safeName}`;
+    const localUrl = `/uploads/${folder}/${safeName}`;
+    let cloudUrl: string | null = null;
 
     if (supabaseBackendClient && supabaseUrl) {
       try {
         let { data, error } = await supabaseBackendClient.storage
           .from(bucket)
-          .upload(safeName, buffer, { contentType: mimeType });
-        if (error && isFutubeBucket) {
+          .upload(safeName, buffer, { contentType: mimeType, upsert: true });
+        if (error) {
           await supabaseBackendClient.storage.createBucket(bucket, { public: true }).catch(() => {});
           const retry = await supabaseBackendClient.storage
             .from(bucket)
-            .upload(safeName, buffer, { contentType: mimeType });
+            .upload(safeName, buffer, { contentType: mimeType, upsert: true });
           data = retry.data;
           error = retry.error;
         }
         if (!error && data?.path) {
-          finalUrl = `${supabaseUrl}/storage/v1/object/public/${bucket}/${data.path}`;
+          cloudUrl = `${supabaseUrl}/storage/v1/object/public/${bucket}/${data.path}`;
         }
       } catch {}
     }
+
+    // Serve same-origin /uploads/... on Node Express for 100% instant reliability (images & videos never fail CORS/private-bucket checks)
+    const finalUrl = IS_SERVERLESS && cloudUrl ? cloudUrl : localUrl;
 
     const sizeBytes = buffer.length;
     const sizeMb = +(sizeBytes / (1024 * 1024)).toFixed(2);
@@ -4299,7 +4506,8 @@ async function handleBinaryMediaUpload(req: express.Request, res: express.Respon
       success: true,
       status: 'UPLOADED',
       url: finalUrl,
-      localUrl: `/uploads/${folder}/${safeName}`,
+      localUrl,
+      cloudUrl,
       fileName: rawName,
       mediaKind,
       videoKind: detectedVideoKind,
@@ -4389,20 +4597,31 @@ app.post('/api/db/upload', uploadLimiter, async (req, res) => {
   const diskPath = path.join(UPLOADS_DIR, folder, safeName);
 
   fs.writeFileSync(diskPath, buffer);
-  let finalUrl = `/uploads/${folder}/${safeName}`;
+  const localUrl = `/uploads/${folder}/${safeName}`;
+  let cloudUrl: string | null = null;
 
   if (supabaseBackendClient && supabaseUrl) {
     try {
-      const { data, error } = await supabaseBackendClient.storage
+      let { data, error } = await supabaseBackendClient.storage
         .from(bucket)
-        .upload(safeName, buffer, { contentType: mimeType });
+        .upload(safeName, buffer, { contentType: mimeType, upsert: true });
+      if (error) {
+        await supabaseBackendClient.storage.createBucket(bucket, { public: true }).catch(() => {});
+        const retry = await supabaseBackendClient.storage
+          .from(bucket)
+          .upload(safeName, buffer, { contentType: mimeType, upsert: true });
+        data = retry.data;
+        error = retry.error;
+      }
       if (!error && data?.path) {
-        finalUrl = `${supabaseUrl}/storage/v1/object/public/${bucket}/${data.path}`;
+        cloudUrl = `${supabaseUrl}/storage/v1/object/public/${bucket}/${data.path}`;
       }
     } catch (err: any) {
       console.warn('[Backend] Storage upload notice:', err?.message);
     }
   }
+
+  const finalUrl = IS_SERVERLESS && cloudUrl ? cloudUrl : localUrl;
 
   if (bucket !== 'video-thumbnails' && mediaKind !== 'audio') {
     mediaRegistry.unshift({
@@ -4709,6 +4928,11 @@ app.get('/api/db/match_rooms/:matchId/messages', async (req, res) => {
     messages = inMemoryMatchRooms[matchId] || [];
   }
 
+  // Filter out any legacy soft-deleted messages so rooms stay completely clean
+  messages = messages.filter(
+    (m: any) => !m?.isDeleted && m?.text !== 'This message was deleted' && m?.content !== 'This message was deleted'
+  );
+
   // Populate reactions for each message
   const populated = messages.map(msg => {
     const msgReactions = inMemoryMatchReactions.filter(r => r.messageId === msg.id);
@@ -4918,24 +5142,27 @@ app.post('/api/db/match_rooms/:matchId/messages/:messageId/react', async (req, r
   return res.json({ success: true, reactions, userReactions, hasReacted });
 });
 
-// Delete Match Message (for everyone or for me)
+// Delete Match Message completely from room, storage & database (clean removal)
 app.post('/api/db/match_rooms/:matchId/messages/:messageId/delete', async (req, res) => {
   const { matchId, messageId } = req.params;
-  const { forEveryone = true } = req.body;
+  const { forEveryone = true } = req.body || {};
 
   const roomMsgs = inMemoryMatchRooms[matchId] || [];
-  const msg = roomMsgs.find(m => m.id === messageId);
+  const idx = roomMsgs.findIndex(m => m.id === messageId);
+  const removed = idx !== -1 ? roomMsgs[idx] : null;
+  if (idx !== -1) {
+    roomMsgs.splice(idx, 1);
+  }
 
-  if (msg) {
-    if (forEveryone) {
-      msg.isDeleted = true;
-      msg.text = 'This message was deleted';
-      msg.content = 'This message was deleted';
-      msg.mediaUrl = null;
-      msg.thumbnailUrl = null;
-    } else {
-      const idx = roomMsgs.indexOf(msg);
-      if (idx !== -1) roomMsgs.splice(idx, 1);
+  if (removed) {
+    const mediaUrls = [removed.mediaUrl, removed.thumbnailUrl];
+    mediaUrls.forEach(deleteUploadFileIfLocal);
+    purgeMediaRegistryByUrls(mediaUrls);
+  }
+
+  for (let i = inMemoryMatchReactions.length - 1; i >= 0; i--) {
+    if (inMemoryMatchReactions[i]?.messageId === messageId) {
+      inMemoryMatchReactions.splice(i, 1);
     }
   }
 
@@ -4943,20 +5170,17 @@ app.post('/api/db/match_rooms/:matchId/messages/:messageId/delete', async (req, 
     try {
       await supabaseBackendClient
         .from('match_messages')
-        .update({
-          is_deleted: true,
-          content: 'This message was deleted',
-          media_url: null,
-          thumbnail_url: null,
-        })
+        .delete()
         .eq('id', messageId);
     } catch {}
   }
 
-  // Broadcast deletion to all subscribers
-  broadcastToRoom(matchId, 'message_deleted', { messageId, forEveryone });
+  await flushStorePersist();
 
-  return res.json({ success: true, messageId });
+  // Broadcast deletion to all subscribers so message is removed immediately everywhere
+  broadcastToRoom(matchId, 'message_deleted', { messageId, forEveryone: true, deleted: true });
+
+  return res.json({ success: true, messageId, deleted: true });
 });
 
 // Pin / Unpin Match Message
@@ -6413,7 +6637,7 @@ app.post('/api/paystack/initialize', paystackLimiter, async (req, res) => {
       : Math.round(spec.usdPrice * liveRate * (ZERO_DECIMAL_CURRENCIES.has(currency) ? 1 : 100));
 
   const reference = `futfield_${currency.toLowerCase()}_${spec.tier}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const origin = (req.headers.origin as string) || process.env.APP_URL || 'https://futfieldsports.com.ng';
+  const origin = (req.headers.origin as string) || process.env.APP_URL || 'https://futfieldsport.com.ng';
   const finalCallbackUrl = callback_url || `${origin.replace(/\/$/, '')}/payment/callback`;
 
   paystackTransactions[reference] = {
@@ -7745,24 +7969,27 @@ app.post('/api/reviews/:id/upvote', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// Viral SEO Endpoints: /robots.txt & Dynamic /sitemap.xml (futfieldsports.com.ng)
+// Viral SEO Endpoints: /robots.txt & Dynamic /sitemap.xml (futfieldsport.com.ng)
 // -------------------------------------------------------------
-const SEO_CANONICAL_DOMAIN = 'https://futfieldsports.com.ng';
+const SEO_CANONICAL_DOMAIN = 'https://futfieldsport.com.ng';
 
 app.get('/robots.txt', (_req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=3600');
   return res.send(
-    `User-agent: *\nAllow: /\nSitemap: ${SEO_CANONICAL_DOMAIN}/sitemap.xml\n`
+    `User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${SEO_CANONICAL_DOMAIN}/sitemap.xml\n`
   );
 });
 
 app.get('/sitemap.xml', (_req, res) => {
   const todayIso = new Date().toISOString().slice(0, 10);
   const staticUrls: Array<{ path: string; changefreq: 'daily' | 'weekly'; priority: string }> = [
-    { path: '/', changefreq: 'weekly', priority: '1.0' },
+    { path: '/', changefreq: 'daily', priority: '1.0' },
     { path: '/live-scores', changefreq: 'daily', priority: '1.0' },
+    { path: '/tube', changefreq: 'daily', priority: '0.95' },
+    { path: '/tube/kicks', changefreq: 'daily', priority: '0.9' },
     { path: '/highlights', changefreq: 'daily', priority: '0.9' },
+    { path: '/communities', changefreq: 'daily', priority: '0.9' },
     { path: '/share', changefreq: 'weekly', priority: '0.85' },
     { path: '/features', changefreq: 'weekly', priority: '0.9' },
     { path: '/pricing', changefreq: 'weekly', priority: '0.9' },
@@ -7791,12 +8018,12 @@ app.get('/sitemap.xml', (_req, res) => {
   for (const mId of Array.from(matchIdSet).slice(0, 30)) {
     staticUrls.push({
       path: `/match/${encodeURIComponent(mId)}`,
-      changefreq: 'weekly',
+      changefreq: 'daily',
       priority: '0.8',
     });
   }
 
-  // Collect dynamic /profile/:username URLs
+  // Collect dynamic /profile/:username and /fanzone/:username URLs
   const profileSet = new Set<string>(['@futfield', '@emirates_gunner']);
   for (const prof of Object.values(inMemoryProfiles)) {
     if (prof?.handle) profileSet.add(String(prof.handle));
@@ -7804,6 +8031,11 @@ app.get('/sitemap.xml', (_req, res) => {
   for (const handle of Array.from(profileSet).slice(0, 30)) {
     staticUrls.push({
       path: `/profile/${encodeURIComponent(handle)}`,
+      changefreq: 'weekly',
+      priority: '0.8',
+    });
+    staticUrls.push({
+      path: `/fanzone/${encodeURIComponent(handle.replace(/^@/, ''))}`,
       changefreq: 'weekly',
       priority: '0.8',
     });

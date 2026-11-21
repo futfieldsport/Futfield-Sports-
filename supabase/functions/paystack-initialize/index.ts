@@ -45,7 +45,7 @@ serve(async (req: Request) => {
     }
 
     const reference = `futfield_${isNigeria ? 'ng' : 'global'}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const finalCallbackUrl = callback_url || 'https://fitfield.com/payment/callback';
+    const finalCallbackUrl = callback_url || 'https://futfieldsport.com.ng/payment/callback';
 
     let paystackResponse: any = null;
 

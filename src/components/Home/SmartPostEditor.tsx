@@ -20,6 +20,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
+import { SafeImage } from '../Common/SafeImage';
 
 interface SmartPostEditorProps {
   onClose?: () => void;
@@ -578,8 +579,9 @@ export const SmartPostEditor: React.FC<SmartPostEditorProps> = ({
         {activeTab === 'preview' && (
           <div className="rounded-2xl bg-slate-50 dark:bg-black/40 border border-slate-200 dark:border-white/5 p-4 space-y-3">
             <div className="flex items-center gap-2.5">
-              <img
-                src={user.avatar}
+              <SafeImage
+                src={user.avatar || '/default-avatar.jpg'}
+                fallbackSrc="/default-avatar.jpg"
                 alt={user.name}
                 className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-200 dark:ring-white/10"
               />
@@ -597,8 +599,12 @@ export const SmartPostEditor: React.FC<SmartPostEditorProps> = ({
             </p>
 
             {selectedPhoto && (
-              <div className="rounded-xl overflow-hidden max-h-48 border border-slate-200 dark:border-white/10">
-                <img src={selectedPhoto} alt="Attached Preview" className="w-full h-full object-cover" />
+              <div className="rounded-xl overflow-hidden bg-slate-100 dark:bg-black/40 border border-slate-200 dark:border-white/10 flex items-center justify-center">
+                <SafeImage
+                  src={selectedPhoto}
+                  alt="Attached Preview"
+                  className="w-full max-h-64 object-contain"
+                />
               </div>
             )}
 

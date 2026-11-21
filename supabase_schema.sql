@@ -485,4 +485,33 @@ ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view own transactions" ON public.transactions FOR SELECT USING (auth.uid() = user_id OR user_id IS NULL);
 CREATE POLICY "Service role can insert transactions" ON public.transactions FOR INSERT WITH CHECK (true);
 
+-- -------------------------------------------------------------
+-- 10. CANONICAL DOMAIN MIGRATION (https://futfieldsport.com.ng)
+-- -------------------------------------------------------------
+UPDATE public.profiles
+SET
+  website = REGEXP_REPLACE(website, 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi'),
+  avatar_url = CASE
+    WHEN avatar_url ILIKE '%/assets/aistudio/%' THEN '/futfield-logo.jpg'
+    ELSE REGEXP_REPLACE(COALESCE(avatar_url, ''), 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi')
+  END
+WHERE website ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com)'
+   OR avatar_url ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com|/assets/aistudio/)';
 
+UPDATE public.posts
+SET
+  content = REGEXP_REPLACE(content, 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi'),
+  image_url = REGEXP_REPLACE(COALESCE(image_url, ''), 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi'),
+  video_url = REGEXP_REPLACE(COALESCE(video_url, ''), 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi')
+WHERE content ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com)'
+   OR image_url ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com)'
+   OR video_url ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com)';
+
+UPDATE public.videos
+SET
+  description = REGEXP_REPLACE(COALESCE(description, ''), 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi'),
+  video_url = REGEXP_REPLACE(video_url, 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi'),
+  thumbnail_url = REGEXP_REPLACE(COALESCE(thumbnail_url, ''), 'https?://(?:www\.)?(?:futfieldsports\.com\.ng|futfield\.com|fitfield\.com)', 'https://futfieldsport.com.ng', 'gi')
+WHERE description ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com)'
+   OR video_url ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com)'
+   OR thumbnail_url ~* '(futfieldsports\.com\.ng|futfield\.com|fitfield\.com)';

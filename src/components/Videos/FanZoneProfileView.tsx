@@ -24,6 +24,7 @@ import {
 import { FutfieldTubeLogo } from './FutfieldTubeLogo';
 import { haptics } from '../../utils/haptics';
 import { isCreatorEmail, isCreatorTarget } from '../../utils/creatorGuard';
+import { SafeImage } from '../Common/SafeImage';
 
 interface FanZoneProfileViewProps {
   usernameOrHandle: string;
@@ -74,7 +75,10 @@ export const FanZoneProfileView: React.FC<FanZoneProfileViewProps> = ({
             username: norm.replace(/^@/, ''),
             handle: norm,
             name: first?.fanzoneName || first?.creator?.name || `${norm.replace(/^@/, '')} FanZone`,
-            avatar: first?.fanzoneAvatar || first?.creator?.avatar || '/futfield-logo.jpg',
+            avatar:
+              first?.fanzoneAvatar ||
+              first?.creator?.avatar ||
+              (isCreatorTarget(norm) ? '/futfield-logo.jpg' : '/default-avatar.jpg'),
             bannerUrl: first?.fanzoneBanner || '/og-image.jpg',
             bio: first?.fanzoneBio || 'Gunners for life — Matchday highlights, tactical breakdowns & Quick Kicks ⚡',
             favoriteClub: first?.clubTag || 'Arsenal',
@@ -216,11 +220,13 @@ export const FanZoneProfileView: React.FC<FanZoneProfileViewProps> = ({
         <div className="px-4 sm:px-6 pb-5 -mt-10 relative space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
             <div className="flex items-end gap-3.5">
-              <img
-                src={profile.avatar}
+              <SafeImage
+                src={profile.avatar || '/default-avatar.jpg'}
+                fallbackSrc="/default-avatar.jpg"
                 alt={profile.name}
-                referrerPolicy="no-referrer"
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover border-4 border-white dark:border-[#12171F] shadow-xl bg-black"
+                loading="eager"
+                wrapperClassName="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden border-4 border-white dark:border-[#12171F] shadow-xl bg-black"
+                className="w-full h-full object-cover"
               />
               <div className="pb-1">
                 <div className="flex items-center gap-1.5 flex-wrap">

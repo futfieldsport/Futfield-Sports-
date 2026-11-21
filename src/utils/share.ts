@@ -4,7 +4,7 @@ import { CANONICAL_DOMAIN } from './seo';
  * Production domain constant strictly enforced across all share links, invites,
  * QR codes, SMS, WhatsApp, and copy buttons to prevent AI Studio dev URLs from leaking.
  */
-export const PROD_DOMAIN = 'https://futfieldsports.com.ng';
+export const PROD_DOMAIN = 'https://futfieldsport.com.ng';
 
 export type ShareContentKind = 'app' | 'profile' | 'video' | 'post' | 'match' | 'blog';
 
@@ -71,7 +71,7 @@ export function detectDevicePhoneContext(): DevicePhoneContext {
 /**
  * Detect environment and return the safe public production origin:
  * If running on ais-dev, localhost, run.app, aistudio, or webcontainer,
- * it returns PROD_DOMAIN ("https://futfieldsports.com.ng").
+ * it returns PROD_DOMAIN ("https://futfieldsport.com.ng").
  */
 export function getShareOrigin(): string {
   if (typeof window !== 'undefined' && window.location?.hostname) {
@@ -101,7 +101,9 @@ export function sanitizeShareUrl(rawUrl?: string): string {
     trimmed.includes('127.0.0.1') ||
     trimmed.includes('aistudio') ||
     trimmed.includes('webcontainer') ||
-    trimmed.includes('futfieldsport.com.ng')
+    trimmed.includes('futfieldsports.com.ng') ||
+    trimmed.includes('futfield.com') ||
+    trimmed.includes('fitfield.com')
   ) {
     try {
       const parsed = new URL(trimmed);
@@ -125,7 +127,7 @@ export function buildShareUrl(path: string = '/'): string {
 
 /**
  * Build user invite / referral link:
- * e.g. https://futfieldsports.com.ng/join?code=amos
+ * e.g. https://futfieldsport.com.ng/join?code=amos
  */
 export function buildUserInviteUrl(user?: { id?: string; handle?: string; name?: string } | null): string {
   if (!user) return `${PROD_DOMAIN}/join`;
@@ -143,7 +145,7 @@ export function buildUserInviteUrl(user?: { id?: string; handle?: string; name?:
 
 /**
  * Build latest video / reel share URL:
- * https://futfieldsports.com.ng/videos/${videoId}
+ * https://futfieldsport.com.ng/videos/${videoId}
  */
 export function buildVideoShareUrl(videoId: string): string {
   return `${PROD_DOMAIN}/videos/${encodeURIComponent(videoId)}`;
@@ -151,7 +153,7 @@ export function buildVideoShareUrl(videoId: string): string {
 
 /**
  * Build live match share URL:
- * https://futfieldsports.com.ng/live/${matchId}
+ * https://futfieldsport.com.ng/live/${matchId}
  */
 export function buildMatchShareUrl(matchId: string): string {
   return `${PROD_DOMAIN}/live/${encodeURIComponent(matchId)}`;

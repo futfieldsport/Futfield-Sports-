@@ -31,12 +31,14 @@ import {
   ExternalLink,
   RotateCcw,
   Lock,
+  Trash2,
 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { POPULAR_TOP_5_CLUBS } from '../../data/top5Clubs';
 import { ClubLogo } from '../Common/ClubLogo';
 import { DailyUsageTracker } from '../Common/DailyUsageTracker';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
+import { SafeImage } from '../Common/SafeImage';
 import { uploadFileToBackend, formatBytesToMb } from '../../utils/mediaUpload';
 import { buildShareUrl } from '../../utils/share';
 import {
@@ -59,6 +61,7 @@ export const ProfileTab: React.FC = () => {
     refreshAndClearProfile,
     setActiveTab,
     posts,
+    deletePost,
     videos,
     addNotification,
     setShowClubSelection,
@@ -140,7 +143,7 @@ export const ProfileTab: React.FC = () => {
         id: viewingProfileUserId,
         name: viewingProfileUserId?.startsWith('@') ? viewingProfileUserId.replace('@', '') : 'Supporter',
         handle: viewingProfileUserId?.startsWith('@') ? viewingProfileUserId : `@${viewingProfileUserId}`,
-        avatar: '/futfield-logo.jpg',
+        avatar: '/default-avatar.jpg',
         bio: 'Football supporter on FUTFIELD ⚽',
         favoriteClub: 'Not Set',
         favoriteClubCrest: '⚽',
@@ -451,8 +454,8 @@ export const ProfileTab: React.FC = () => {
 
       {/* Main Profile Header Card */}
       <div className="rounded-3xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 p-5 shadow-sm text-center relative space-y-3">
-        {/* Large Avatar with Tap-To-Change if own profile */}
-        <div className="relative inline-block mx-auto">
+        {/* Large Avatar with Phone Gallery Upload Prompt until customized */}
+        <div className="relative inline-flex flex-col items-center mx-auto gap-1.5">
           {isOwnProfile && (
             <input
               type="file"
@@ -462,21 +465,37 @@ export const ProfileTab: React.FC = () => {
               className="hidden"
             />
           )}
-          <img
-            src={displayProfile.avatar}
-            alt={displayProfile.name}
-            className={`w-20 h-20 rounded-full object-cover ring-4 ring-[#00E676]/40 shadow-xl ${
-              isOwnProfile ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''
-            }`}
-            onClick={() => isOwnProfile && avatarInputRef.current?.click()}
-          />
-          {isOwnProfile && (
+          <div className="relative inline-block">
+            <SafeImage
+              src={displayProfile.avatar || '/default-avatar.jpg'}
+              fallbackSrc="/default-avatar.jpg"
+              alt={displayProfile.name}
+              loading="eager"
+              wrapperClassName="w-24 h-24 rounded-full overflow-hidden ring-4 ring-[#00E676]/45 shadow-xl bg-slate-900"
+              className={`w-full h-full object-cover ${
+                isOwnProfile ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''
+              }`}
+              onClick={() => isOwnProfile && avatarInputRef.current?.click()}
+            />
+            {isOwnProfile && (
+              <button
+                type="button"
+                onClick={() => avatarInputRef.current?.click()}
+                className="absolute bottom-0 right-0 min-h-[34px] min-w-[34px] p-2 rounded-full bg-slate-900 text-white border-2 border-white dark:border-[#12171F] shadow-lg hover:bg-[#00E676] hover:text-black transition-colors flex items-center justify-center"
+                title="Add photo from phone gallery"
+              >
+                <Camera className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {isOwnProfile && (!user.avatar || user.avatar === '/default-avatar.jpg') && (
             <button
+              type="button"
               onClick={() => avatarInputRef.current?.click()}
-              className="absolute bottom-0 right-0 min-h-[30px] min-w-[30px] p-1.5 rounded-full bg-slate-900 text-white border-2 border-white dark:border-[#12171F] shadow hover:bg-black transition-colors flex items-center justify-center"
-              title="Change avatar photo"
+              className="px-3 py-1 rounded-full bg-slate-100 dark:bg-white/10 hover:bg-[#00E676]/15 hover:text-[#00C853] border border-slate-200 dark:border-white/10 text-[10px] font-extrabold text-slate-600 dark:text-white/75 flex items-center gap-1 transition-colors"
             >
-              <Camera className="w-3.5 h-3.5" />
+              <Camera className="w-3 h-3 text-[#00C853]" />
+              <span>Add Photo from Gallery</span>
             </button>
           )}
         </div>
@@ -781,12 +800,38 @@ export const ProfileTab: React.FC = () => {
                 className="p-3.5 rounded-2xl bg-white dark:bg-[#12171F] border border-slate-200/90 dark:border-white/8 space-y-2 text-xs"
               >
                 <div className="flex items-center justify-between text-slate-400 text-[10px]">
-                  <span>{p.timestamp}</span>
-                  {p.location && <span>📍 {p.location}</span>}
+                  <div className="flex items-center gap-2">
+                    <span>{p.timestamp}</span>
+                    {p.location && <span>📍 {p.location}</span>}
+                  </div>
+                  {(isOwnProfile || p.userId === user.id || p.author?.handle === user.handle) && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await deletePost(p.id);
+                        addNotification({
+                          title: 'Post Deleted',
+                          body: 'Post permanently removed and cleaned up.',
+                          type: 'system',
+                        });
+                      }}
+                      className="min-h-[30px] px-2.5 py-1 rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 font-bold flex items-center gap-1 transition-colors"
+                      title="Delete post"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Delete</span>
+                    </button>
+                  )}
                 </div>
                 <p className="text-slate-900 dark:text-white leading-relaxed">{p.content}</p>
                 {p.imageUrl && (
-                  <img src={p.imageUrl} alt="football fan post highlight photo" loading="lazy" decoding="async" className="rounded-xl max-h-48 w-full object-cover" />
+                  <SafeImage
+                    src={p.imageUrl}
+                    alt="football fan post highlight photo"
+                    loading="lazy"
+                    wrapperClassName="w-full rounded-xl overflow-hidden bg-slate-100 dark:bg-black/40 border border-slate-200/70 dark:border-white/10"
+                    className="max-h-72 w-full object-contain mx-auto"
+                  />
                 )}
                 <div className="flex items-center gap-4 text-[11px] text-slate-500 pt-1 border-t border-slate-100 dark:border-white/5">
                   <span>❤️ {p.likes} likes</span>
@@ -917,7 +962,7 @@ export const ProfileTab: React.FC = () => {
                   className="flex items-center gap-2 cursor-pointer group"
                 >
                   <img
-                    src={p.author?.avatar || '/futfield-logo.jpg'}
+                    src={p.author?.avatar || '/default-avatar.jpg'}
                     alt={`${p.author?.name || 'Supporter'} football fan avatar`}
                     loading="lazy"
                     decoding="async"
@@ -992,17 +1037,40 @@ export const ProfileTab: React.FC = () => {
               </div>
             )}
 
-            {/* Avatar preview and change */}
-            <div className="space-y-2">
-              <div className="flex items-center gap-3">
-                <img src={editAvatar} alt="Football fan profile avatar preview" loading="lazy" decoding="async" className="w-12 h-12 rounded-full object-cover ring-2 ring-[#00E676]" />
-                <button
-                  type="button"
-                  onClick={() => avatarInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-white/10 text-[11px] font-bold text-slate-700 dark:text-white"
-                >
-                  Upload Photo
-                </button>
+            {/* Studio Avatar Preview & Phone Gallery Picker */}
+            <div className="space-y-2.5 p-3 rounded-2xl bg-slate-50 dark:bg-black/30 border border-slate-200/80 dark:border-white/10">
+              <div className="flex items-center gap-3.5">
+                <SafeImage
+                  src={editAvatar || '/default-avatar.jpg'}
+                  fallbackSrc="/default-avatar.jpg"
+                  alt="Football fan profile avatar preview"
+                  loading="eager"
+                  wrapperClassName="w-16 h-16 rounded-full overflow-hidden ring-2 ring-[#00E676] bg-slate-900 shrink-0"
+                  className="w-full h-full object-cover"
+                />
+                <div className="flex-1 min-w-0 space-y-1.5">
+                  <p className="text-[11px] font-bold text-slate-800 dark:text-white">
+                    Profile Photo Preview
+                  </p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => avatarInputRef.current?.click()}
+                      className="min-h-[34px] px-3 py-1 rounded-full bg-[#00E676] text-black text-[11px] font-extrabold hover:bg-[#00c864] transition-colors"
+                    >
+                      Choose from Gallery
+                    </button>
+                    {editAvatar && editAvatar !== '/default-avatar.jpg' && !isCreatorEmail(user.email) && (
+                      <button
+                        type="button"
+                        onClick={() => setEditAvatar('/default-avatar.jpg')}
+                        className="min-h-[34px] px-2.5 py-1 rounded-full bg-slate-200 dark:bg-white/10 text-[10px] font-bold text-slate-700 dark:text-white/80"
+                      >
+                        Use Mockup
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
               {avatarUploadStatus !== 'idle' && (
                 <MediaUploadSplash

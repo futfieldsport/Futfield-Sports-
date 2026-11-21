@@ -26,6 +26,8 @@ import {
   syncUserProfile,
   syncPostToBackend,
   createPostOnServer,
+  deletePostOnServer,
+  deletePostCommentOnServer,
   logoutUser,
   fetchServerPosts,
   fetchServerVideos,
@@ -72,9 +74,17 @@ export type SupportLegalSection =
   | 'guidelines'
   | 'cookies';
 
-const DEFAULT_CREATOR_AVATAR = '/futfield-logo.jpg';
+const DEFAULT_CREATOR_AVATAR = '/default-avatar.jpg';
+const OFFICIAL_CREATOR_AVATAR = '/futfield-logo.jpg';
 
 export type TubeSubView = 'feed' | 'watch' | 'kicks' | 'upload' | 'fanzone';
+
+function resolveDisplayAvatar(rawAvatar: string | undefined, handleOrId: string | undefined): string {
+  const isCreator = isCreatorTarget(handleOrId);
+  if (isCreator) return OFFICIAL_CREATOR_AVATAR;
+  if (!rawAvatar || rawAvatar === OFFICIAL_CREATOR_AVATAR) return DEFAULT_CREATOR_AVATAR;
+  return rawAvatar;
+}
 
 export function normalizeVideoItem(raw: any): VideoItem {
   const creatorObj = raw?.creator && typeof raw.creator === 'object' ? raw.creator : {};
@@ -84,6 +94,10 @@ export function normalizeVideoItem(raw: any): VideoItem {
   const cheersVal = Number(raw?.cheers ?? raw?.likes ?? 0);
   const shoutsVal = Number(raw?.shoutsCount ?? raw?.commentsCount ?? 0);
   const isQuickKick = Boolean(raw?.isQuickKick ?? (raw?.aspectRatio === '9:16' || raw?.videoKind === 'short'));
+  const resolvedAvatar = resolveDisplayAvatar(
+    raw?.fanzoneAvatar || creatorObj.avatar || authorObj.avatar,
+    fallbackHandle || raw?.userId
+  );
   return {
     ...raw,
     id: raw?.id || `ft_${Date.now()}`,
@@ -111,14 +125,14 @@ export function normalizeVideoItem(raw: any): VideoItem {
     fanzoneId: raw?.fanzoneId || fallbackHandle,
     fanzoneName: raw?.fanzoneName || creatorObj.name || authorObj.name || 'FanZone Creator',
     fanzoneHandle: fallbackHandle,
-    fanzoneAvatar: raw?.fanzoneAvatar || creatorObj.avatar || authorObj.avatar || DEFAULT_CREATOR_AVATAR,
+    fanzoneAvatar: resolvedAvatar,
     squadCount: Number(raw?.squadCount) || 1,
     hashtags: Array.isArray(raw?.hashtags) ? raw.hashtags : [],
     creator: {
       name: raw?.fanzoneName || creatorObj.name || authorObj.name || 'FanZone Creator',
       handle: fallbackHandle,
       subscribers: creatorObj.subscribers || `${Number(raw?.squadCount) || 1} Squad`,
-      avatar: raw?.fanzoneAvatar || creatorObj.avatar || authorObj.avatar || DEFAULT_CREATOR_AVATAR,
+      avatar: resolvedAvatar,
       isSubscribed: Boolean(raw?.isConnected ?? creatorObj.isSubscribed),
       isVerified: Boolean(creatorObj.isVerified),
     },
@@ -157,6 +171,7 @@ export function isTestArtifactVideo(raw: any): boolean {
 export function normalizePostItem(raw: any): Post {
   const authorObj = raw?.author && typeof raw.author === 'object' ? raw.author : {};
   const creatorObj = raw?.creator && typeof raw.creator === 'object' ? raw.creator : {};
+  const resolvedHandle = authorObj.handle || creatorObj.handle || (raw?.userId ? `@user_${String(raw.userId).slice(0, 6)}` : '@fan');
   return {
     ...raw,
     id: raw?.id || `post_${Date.now()}`,
@@ -171,8 +186,8 @@ export function normalizePostItem(raw: any): Post {
     category: raw?.category || 'foryou',
     author: {
       name: authorObj.name || creatorObj.name || 'Football Supporter',
-      handle: authorObj.handle || creatorObj.handle || (raw?.userId ? `@user_${String(raw.userId).slice(0, 6)}` : '@fan'),
-      avatar: authorObj.avatar || creatorObj.avatar || DEFAULT_CREATOR_AVATAR,
+      handle: resolvedHandle,
+      avatar: resolveDisplayAvatar(authorObj.avatar || creatorObj.avatar, resolvedHandle || raw?.userId),
       clubBadge: authorObj.clubBadge || raw?.clubTag || undefined,
       isVerified: Boolean(authorObj.isVerified),
     },
@@ -258,6 +273,8 @@ interface FootballContextType {
   toggleSavePost: (postId: string) => void;
   votePoll: (postId: string, optionId: string) => void;
   addCommentToPost: (postId: string, text: string) => void;
+  deletePost: (postId: string) => Promise<boolean>;
+  deletePostComment: (postId: string, commentId: string) => Promise<boolean>;
   translatePostContent: (postId: string) => Promise<void>;
   
   // Matches & Match Rooms
@@ -461,11 +478,19 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (!saved) return INITIAL_USER;
       const parsed = JSON.parse(saved);
       if (parsed && !isCreatorEmail(parsed.email)) {
+        const cleanAvatar =
+          !parsed.avatar || parsed.avatar === OFFICIAL_CREATOR_AVATAR
+            ? DEFAULT_CREATOR_AVATAR
+            : parsed.avatar;
         return {
           ...parsed,
+          avatar: cleanAvatar,
           name: sanitizeNonCreatorName(parsed.name, parsed.email),
           handle: sanitizeNonCreatorHandle(parsed.handle, parsed.email),
         };
+      }
+      if (parsed && isCreatorEmail(parsed.email) && (!parsed.avatar || parsed.avatar === DEFAULT_CREATOR_AVATAR)) {
+        return { ...parsed, avatar: OFFICIAL_CREATOR_AVATAR };
       }
       return parsed || INITIAL_USER;
     } catch {
@@ -909,12 +934,12 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     fetchLiveMatches();
     fetchServerPosts()
       .then(srv => {
-        if (Array.isArray(srv) && srv.length > 0) setPosts(srv.filter(Boolean).map(normalizePostItem));
+        if (Array.isArray(srv)) setPosts(srv.filter(Boolean).map(normalizePostItem));
       })
       .catch(() => {});
     fetchServerVideos()
       .then(srv => {
-        if (Array.isArray(srv) && srv.length > 0) setVideos(srv.filter(Boolean).map(normalizeVideoItem));
+        if (Array.isArray(srv)) setVideos(srv.filter(Boolean).map(normalizeVideoItem));
       })
       .catch(() => {});
     return { clearedKeys };
@@ -1308,6 +1333,41 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (payload?.videoId) {
               setVideos(prev => prev.filter(v => v.id !== payload.videoId));
               setLatestUploadedVideoId(prev => (prev === payload.videoId ? null : prev));
+              setTubeWatchVideoId(prev => (prev === payload.videoId ? null : prev));
+            }
+          } catch {}
+        });
+
+        sse.addEventListener('post_deleted', (e: MessageEvent) => {
+          try {
+            const payload = JSON.parse(e.data);
+            if (payload?.postId) {
+              setPosts(prev => prev.filter(p => p.id !== payload.postId));
+            }
+          } catch {}
+        });
+
+        sse.addEventListener('post_comment_deleted', (e: MessageEvent) => {
+          try {
+            const payload = JSON.parse(e.data);
+            if (payload?.postId && payload?.commentId) {
+              setPosts(prev =>
+                prev.map(p => {
+                  if (p.id !== payload.postId) return p;
+                  const filtered = (p.commentsList || [])
+                    .filter(c => c.id !== payload.commentId)
+                    .map(c =>
+                      Array.isArray(c.replies)
+                        ? { ...c, replies: c.replies.filter(r => r.id !== payload.commentId) }
+                        : c
+                    );
+                  return {
+                    ...p,
+                    commentsList: filtered,
+                    commentsCount: Math.max(0, (p.commentsCount || 0) - 1),
+                  };
+                })
+              );
             }
           } catch {}
         });
@@ -1449,20 +1509,14 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     connectStream();
     refreshMediaAndAnalytics();
 
-    // Initial parallel server hydration
+    // Initial parallel server hydration (server is authoritative so deleted items stay deleted)
     fetchServerPosts()
       .then(serverPosts => {
         if (Array.isArray(serverPosts)) {
           const normalized = serverPosts
             .filter(p => Boolean(p) && !isTestArtifactPost(p))
             .map(normalizePostItem);
-          setPosts(prev => {
-            const cleanPrev = prev.filter(p => !isTestArtifactPost(p));
-            if (normalized.length === 0) return cleanPrev;
-            const serverIds = new Set(normalized.map(p => p.id));
-            const localOnly = cleanPrev.filter(p => !serverIds.has(p.id));
-            return [...normalized, ...localOnly];
-          });
+          setPosts(normalized);
         }
       })
       .catch(() => {});
@@ -1473,13 +1527,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           const normalized = serverVideos
             .filter(v => Boolean(v) && !isTestArtifactVideo(v))
             .map(normalizeVideoItem);
-          setVideos(prev => {
-            const cleanPrev = prev.filter(v => !isTestArtifactVideo(v));
-            if (normalized.length === 0) return cleanPrev;
-            const serverIds = new Set(normalized.map(v => v.id));
-            const localOnly = cleanPrev.filter(v => !serverIds.has(v.id));
-            return [...normalized, ...localOnly];
-          });
+          setVideos(normalized);
         }
       })
       .catch(() => {});
@@ -1494,14 +1542,11 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const periodicSync = setInterval(() => {
       fetchServerPosts().then(srvPosts => {
-        if (srvPosts && srvPosts.length > 0) {
-          setPosts(prev => {
-            const serverMap = new Map(srvPosts.map(p => [p.id, p]));
-            return prev.map(p => {
-              const fresh = serverMap.get(p.id);
-              return fresh ? { ...p, likes: fresh.likes, commentsCount: fresh.commentsCount, shares: fresh.shares, reactions: fresh.reactions } : p;
-            });
-          });
+        if (Array.isArray(srvPosts)) {
+          const normalized = srvPosts
+            .filter(p => Boolean(p) && !isTestArtifactPost(p))
+            .map(normalizePostItem);
+          setPosts(normalized);
         }
       }).catch(() => {});
     }, 25000);
@@ -1789,6 +1834,50 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     addFanPoints(1, 'Commented on post');
   };
 
+  const deletePost = async (postId: string): Promise<boolean> => {
+    haptics.light();
+    const target = posts.find(p => p.id === postId);
+    setPosts(prev => {
+      const next = prev.filter(p => p.id !== postId);
+      try {
+        localStorage.setItem('futfield_posts', JSON.stringify(next.slice(0, 60)));
+      } catch {}
+      return next;
+    });
+    if (
+      target &&
+      (target.userId === user.id ||
+        target.author?.handle?.toLowerCase() === user.handle?.toLowerCase())
+    ) {
+      updateUser({ postsCount: Math.max(0, (user.postsCount || 0) - 1) });
+    }
+    const ok = await deletePostOnServer(postId);
+    refreshMediaAndAnalytics().catch(() => {});
+    return ok;
+  };
+
+  const deletePostComment = async (postId: string, commentId: string): Promise<boolean> => {
+    haptics.light();
+    setPosts(prev =>
+      prev.map(p => {
+        if (p.id !== postId) return p;
+        const filtered = (p.commentsList || [])
+          .filter(c => c.id !== commentId)
+          .map(c =>
+            Array.isArray(c.replies)
+              ? { ...c, replies: c.replies.filter(r => r.id !== commentId) }
+              : c
+          );
+        return {
+          ...p,
+          commentsList: filtered,
+          commentsCount: Math.max(0, (p.commentsCount || 0) - 1),
+        };
+      })
+    );
+    return await deletePostCommentOnServer(postId, commentId);
+  };
+
   const translatePostContent = async (postId: string) => {
     const post = posts.find(p => p.id === postId);
     if (!post) return;
@@ -1928,23 +2017,7 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const deleteMatchMessage = async (matchId: string, messageId: string, forEveryone = true) => {
     setMatchChats(prev => {
       const roomMsgs = prev[matchId] || [];
-      if (!forEveryone) {
-        return { ...prev, [matchId]: roomMsgs.filter(m => m.id !== messageId) };
-      }
-      const updated = roomMsgs.map(m => {
-        if (m.id === messageId) {
-          return {
-            ...m,
-            isDeleted: true,
-            text: 'This message was deleted',
-            content: 'This message was deleted',
-            mediaUrl: undefined,
-            thumbnailUrl: undefined,
-          };
-        }
-        return m;
-      });
-      return { ...prev, [matchId]: updated };
+      return { ...prev, [matchId]: roomMsgs.filter(m => m.id !== messageId) };
     });
     await deleteMatchMessageOnServer(matchId, messageId, forEveryone);
   };
@@ -2200,14 +2273,20 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const deleteVideo = async (videoId: string): Promise<boolean> => {
     haptics.light();
-    setVideos(prev => prev.filter(v => v.id !== videoId));
+    setVideos(prev => {
+      const next = prev.filter(v => v.id !== videoId);
+      try {
+        localStorage.setItem('futfield_videos', JSON.stringify(next.slice(0, 60)));
+      } catch {}
+      return next;
+    });
     setLatestUploadedVideoId(prev => (prev === videoId ? null : prev));
     setTubeWatchVideoId(prev => (prev === videoId ? null : prev));
     setActiveVideoIndex(0);
     const ok = await deleteVideoOnServer(videoId);
     addNotification({
       title: 'Clip Removed',
-      body: 'Your clip has been deleted from Futfield Tube.',
+      body: 'Your clip has been permanently deleted.',
       type: 'system',
     });
     refreshMediaAndAnalytics().catch(() => {});
@@ -2508,6 +2587,8 @@ export const FootballProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         toggleSavePost,
         votePoll,
         addCommentToPost,
+        deletePost,
+        deletePostComment,
         translatePostContent,
         matches,
         activeMatchRoom,

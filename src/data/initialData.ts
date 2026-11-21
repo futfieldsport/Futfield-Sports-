@@ -16,7 +16,7 @@ export const INITIAL_USER: UserProfile = {
   id: 'guest_user',
   name: 'Football Fan',
   handle: '@fan',
-  avatar: '/futfield-logo.jpg',
+  avatar: '/default-avatar.jpg',
   bio: 'Football fan on FUTFIELD ⚽',
   favoriteClub: 'Not Set',
   favoriteClubCrest: '⚽',

@@ -58,6 +58,7 @@ import { haptics } from '../../utils/haptics';
 import { useHaptics } from '../../hooks/useHaptics';
 import { uploadFileToBackend, formatBytesToMb } from '../../utils/mediaUpload';
 import { MediaUploadSplash, UploadSplashStatus } from '../Common/MediaUploadSplash';
+import { SafeImage } from '../Common/SafeImage';
 
 interface MatchRoomModalProps {
   match: Match;
@@ -328,20 +329,7 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
         );
       },
       onMessageDeleted: ({ messageId }) => {
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === messageId
-              ? {
-                  ...m,
-                  isDeleted: true,
-                  text: 'This message was deleted',
-                  content: 'This message was deleted',
-                  mediaUrl: undefined,
-                  thumbnailUrl: undefined,
-                }
-              : m
-          )
-        );
+        setMessages(prev => prev.filter(m => m.id !== messageId));
       },
       onMessagePinned: ({ messageId, isPinned }) => {
         setMessages(prev =>
@@ -751,31 +739,15 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
     await reactToMatchMessageOnServer(match.id, messageId, emoji, user.id);
   };
 
-  // 8. Delete Message (For everyone vs for me)
+  // 8. Delete Message (completely clean removal)
   const handleDeleteMessage = async (message: MatchChatMessage, forEveryone = true) => {
     setSelectedMessageAction(null);
-    setMessages(prev => {
-      if (!forEveryone) {
-        return prev.filter(m => m.id !== message.id);
-      }
-      return prev.map(m =>
-        m.id === message.id
-          ? {
-              ...m,
-              isDeleted: true,
-              text: 'This message was deleted',
-              content: 'This message was deleted',
-              mediaUrl: undefined,
-              thumbnailUrl: undefined,
-            }
-          : m
-      );
-    });
+    setMessages(prev => prev.filter(m => m.id !== message.id));
 
     await deleteMatchMessageOnServer(match.id, message.id, forEveryone);
     addNotification({
       title: 'Message Deleted',
-      body: forEveryone ? 'Deleted for everyone in match room.' : 'Deleted for you.',
+      body: 'Message removed and cleared from the match room.',
       type: 'system',
     });
   };
@@ -1395,7 +1367,7 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
                 {!isMe && (
                   <img
                     onClick={() => navigateToProfile(msg.user?.handle || msg.user?.id)}
-                    src={msg.user?.avatar || '/futfield-logo.jpg'}
+                    src={msg.user?.avatar || '/default-avatar.jpg'}
                     alt={`${msg.user?.name || 'Supporter'} football fan avatar`}
                     loading="lazy"
                     decoding="async"
@@ -1444,10 +1416,12 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
                       </div>
 
                       <button
+                        type="button"
                         onClick={() => setSelectedMessageAction(msg)}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-opacity"
+                        className="opacity-70 hover:opacity-100 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-opacity"
+                        title="Message options"
                       >
-                        <MoreVertical className="w-3 h-3" />
+                        <MoreVertical className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   )}
@@ -1474,14 +1448,14 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
                   {msg.mediaType === 'image' && msg.mediaUrl && (
                     <div
                       onClick={() => setActiveViewerImage({ url: msg.mediaUrl!, caption: msg.text })}
-                      className="rounded-xl overflow-hidden cursor-pointer relative group/img bg-black/10"
+                      className="rounded-xl overflow-hidden cursor-pointer relative group/img bg-slate-100 dark:bg-black/40 border border-black/5 dark:border-white/10"
                     >
-                      <img
+                      <SafeImage
                         src={msg.mediaUrl}
                         alt={`live score match chat photo for ${match.homeTeam.name} vs ${match.awayTeam.name}`}
                         loading="lazy"
-                        decoding="async"
-                        className="max-h-60 w-full object-cover rounded-xl hover:opacity-95 transition-opacity"
+                        wrapperClassName="w-full min-h-[120px] flex items-center justify-center"
+                        className="max-h-72 w-full object-contain rounded-xl hover:opacity-95 transition-opacity"
                       />
                     </div>
                   )}
@@ -1542,8 +1516,10 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
                 {/* 3-Dots Menu button for Own Message */}
                 {isMe && (
                   <button
+                    type="button"
                     onClick={() => setSelectedMessageAction(msg)}
-                    className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-opacity mb-1"
+                    className="opacity-75 hover:opacity-100 p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white transition-opacity mb-1"
+                    title="Delete or reply"
                   >
                     <MoreVertical className="w-3.5 h-3.5" />
                   </button>
@@ -1838,11 +1814,15 @@ export const MatchRoomModal: React.FC<MatchRoomModalProps> = ({ match, onClose }
             </div>
 
             {chatUploadStatus === 'uploaded' && pendingUploadMedia.url && (
-              <img
-                src={pendingUploadMedia.url}
-                alt="Uploaded match photo"
-                className="max-h-[55vh] max-w-full rounded-2xl object-contain shadow-2xl border border-[#00E676]/40 animate-in fade-in"
-              />
+              <div className="w-full max-w-md rounded-2xl overflow-hidden bg-slate-950 border border-[#00E676]/40 shadow-2xl p-2 flex items-center justify-center">
+                <SafeImage
+                  src={pendingUploadMedia.url}
+                  alt="Uploaded match photo preview"
+                  loading="eager"
+                  wrapperClassName="w-full flex items-center justify-center"
+                  className="max-h-[52vh] max-w-full rounded-xl object-contain"
+                />
+              </div>
             )}
           </div>
 

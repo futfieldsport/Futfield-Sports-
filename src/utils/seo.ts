@@ -1,7 +1,7 @@
 import { Match } from '../types/football';
 import { BLOG_ARTICLES } from '../data/blogArticles';
 
-export const PROD_DOMAIN = 'https://futfieldsports.com.ng';
+export const PROD_DOMAIN = 'https://futfieldsport.com.ng';
 export const CANONICAL_DOMAIN = PROD_DOMAIN;
 export const DEFAULT_OG_IMAGE = `${PROD_DOMAIN}/futfield-logo.jpg`;
 export const DEFAULT_SEO_TITLE = 'FUTFIELD — Live Football Scores, Match Rooms & Futfield Tube';
@@ -387,7 +387,7 @@ export function applyRouteSeoMetadata(params: {
         dateModified: todayIso,
         author: {
           '@type': 'Organization',
-          name: 'Fitfield',
+          name: 'Futfield',
         },
         publisher: {
           '@type': 'Organization',

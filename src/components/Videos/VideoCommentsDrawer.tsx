@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, Flame, MessageCircle, CornerDownRight } from 'lucide-react';
+import { X, Send, Flame, MessageCircle, CornerDownRight, Trash2 } from 'lucide-react';
 import { useFootball } from '../../context/FootballContext';
 import { FutubeShout, VideoItem } from '../../types/football';
 import {
   fetchFutubeShouts,
   postFutubeShout,
   cheerFutubeShout,
+  deleteFutubeShoutOnServer,
 } from '../../services/supabaseClient';
 import { haptics } from '../../utils/haptics';
 import { useHaptics } from '../../hooks/useHaptics';
@@ -172,7 +173,7 @@ export const VideoCommentsDrawer: React.FC<VideoCommentsDrawerProps> = ({
               <div key={s.id} className="space-y-1.5">
                 <div className="flex items-start gap-3 text-xs">
                   <img
-                    src={s.authorAvatar || user.avatar}
+                    src={s.authorAvatar || '/default-avatar.jpg'}
                     alt={s.authorName || 'Supporter'}
                     onClick={() => {
                       onClose();
@@ -191,9 +192,24 @@ export const VideoCommentsDrawer: React.FC<VideoCommentsDrawerProps> = ({
                       >
                         {s.authorName || 'Supporter'}
                       </span>
-                      <span className="text-[10px] text-slate-400 dark:text-white/40 font-mono">
-                        {formatShoutTime(s.createdAt)}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[10px] text-slate-400 dark:text-white/40 font-mono">
+                          {formatShoutTime(s.createdAt)}
+                        </span>
+                        {(s.userId === user.id || s.authorHandle === user.handle || video.userId === user.id) && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setShouts((prev) => prev.filter((item) => item.id !== s.id));
+                              await deleteFutubeShoutOnServer(s.id);
+                            }}
+                            className="text-slate-400 hover:text-rose-500 p-0.5 transition-colors"
+                            title="Delete Shout"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <p className="text-slate-700 dark:text-white/80 mt-1 leading-relaxed break-words">
                       {s.text}
@@ -234,9 +250,30 @@ export const VideoCommentsDrawer: React.FC<VideoCommentsDrawerProps> = ({
                       <div key={r.id} className="flex items-start gap-2 text-xs">
                         <CornerDownRight className="w-3.5 h-3.5 text-[#00C853] shrink-0 mt-1" />
                         <div className="flex-1 bg-slate-100 dark:bg-white/5 p-2 rounded-xl">
-                          <span className="font-bold text-[10px] text-slate-900 dark:text-white block">
-                            {r.authorName || 'Supporter'}
-                          </span>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-[10px] text-slate-900 dark:text-white block">
+                              {r.authorName || 'Supporter'}
+                            </span>
+                            {(r.userId === user.id || r.authorHandle === user.handle || video.userId === user.id) && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  setShouts((prev) =>
+                                    prev.map((item) =>
+                                      item.id === s.id
+                                        ? { ...item, replies: (item.replies || []).filter((rep) => rep.id !== r.id) }
+                                        : item
+                                    )
+                                  );
+                                  await deleteFutubeShoutOnServer(r.id);
+                                }}
+                                className="text-slate-400 hover:text-rose-500 p-0.5 transition-colors"
+                                title="Delete reply"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
                           <p className="text-slate-700 dark:text-white/80 text-[11px] mt-0.5">
                             {r.text}
                           </p>

@@ -65,6 +65,7 @@ export const FutfieldStudioTab: React.FC = () => {
     updateUser,
     addVideo,
     addPost,
+    deletePost,
     refreshMediaAndAnalytics,
     openShareSheet,
     openVideoInReels,
@@ -434,7 +435,7 @@ export const FutfieldStudioTab: React.FC = () => {
           <div className="flex items-center gap-3 min-w-0">
             <div className="relative shrink-0">
               <img
-                src={user.avatar || '/futfield-logo.jpg'}
+                src={user.avatar || '/default-avatar.jpg'}
                 alt={user.name}
                 referrerPolicy="no-referrer"
                 className="w-13 h-13 rounded-2xl object-cover ring-2 ring-[#00E676]/30 shadow-md"
@@ -969,6 +970,21 @@ export const FutfieldStudioTab: React.FC = () => {
                         title="Edit details"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await deletePost(post.id);
+                          addNotification({
+                            title: 'Post Deleted',
+                            body: 'Post permanently removed and cleared.',
+                            type: 'system',
+                          });
+                        }}
+                        className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white transition-colors"
+                        title="Delete post permanently"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
@@ -1525,7 +1541,7 @@ export const FutfieldStudioTab: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-2">
                         <img
-                          src={c.author?.avatar || '/futfield-logo.jpg'}
+                          src={c.author?.avatar || '/default-avatar.jpg'}
                           alt={c.author?.name || 'Supporter'}
                           referrerPolicy="no-referrer"
                           className="w-7 h-7 rounded-full object-cover"

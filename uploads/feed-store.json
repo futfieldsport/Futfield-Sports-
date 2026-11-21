@@ -3,6 +3,180 @@
   "videos": [],
   "postComments": [],
   "videoComments": [],
+  "futubeConnects": [],
+  "futubeCheers": [],
+  "futubeBoos": [],
+  "futubeShouts": [],
+  "futubeWatchHistory": [],
+  "futubePacks": [],
+  "futubeBattles": [],
+  "futubeLiveChats": {},
+  "futubeDailyUploads": {
+    "verify_user_1_2026-11-21": [
+      "verify_video_1"
+    ]
+  },
   "paystackTransactions": {},
-  "activeSubscriptions": {}
+  "activeSubscriptions": {},
+  "follows": [],
+  "authCredentials": {},
+  "profiles": {
+    "futfield_creator_official": {
+      "id": "39ac89f9-ccd9-4be5-9324-b06bed16a74f",
+      "name": "Futfield ",
+      "handle": "@futfield",
+      "avatar": "/futfield-logo.jpg",
+      "bio": "⚽ Arsenal Supporter | Matchday Tactician | FUTFIELD Community Member",
+      "favoriteClub": "Arsenal",
+      "favoriteClubCrest": "⚽",
+      "favoriteCountry": "Nigeria",
+      "favoriteCountryFlag": "🌍",
+      "favoritePlayers": [],
+      "fanPoints": 2,
+      "weeklyPoints": 2,
+      "followersCount": 0,
+      "followingCount": 0,
+      "postsCount": 1,
+      "predictionAccuracy": 0,
+      "correctPredictions": 0,
+      "totalPredictions": 0,
+      "badges": [],
+      "isAuthenticated": true,
+      "location": "",
+      "website": "",
+      "email": "futfieldsport@gmail.com",
+      "isOfficialCreator": true
+    },
+    "@futfield": {
+      "id": "39ac89f9-ccd9-4be5-9324-b06bed16a74f",
+      "name": "Futfield ",
+      "handle": "@futfield",
+      "avatar": "/futfield-logo.jpg",
+      "bio": "⚽ Arsenal Supporter | Matchday Tactician | FUTFIELD Community Member",
+      "favoriteClub": "Arsenal",
+      "favoriteClubCrest": "⚽",
+      "favoriteCountry": "Nigeria",
+      "favoriteCountryFlag": "🌍",
+      "favoritePlayers": [],
+      "fanPoints": 2,
+      "weeklyPoints": 2,
+      "followersCount": 0,
+      "followingCount": 0,
+      "postsCount": 1,
+      "predictionAccuracy": 0,
+      "correctPredictions": 0,
+      "totalPredictions": 0,
+      "badges": [],
+      "isAuthenticated": true,
+      "location": "",
+      "website": "",
+      "email": "futfieldsport@gmail.com",
+      "isOfficialCreator": true
+    },
+    "futfieldsport@gmail.com": {
+      "id": "39ac89f9-ccd9-4be5-9324-b06bed16a74f",
+      "name": "Futfield ",
+      "handle": "@futfield",
+      "avatar": "/futfield-logo.jpg",
+      "bio": "⚽ Arsenal Supporter | Matchday Tactician | FUTFIELD Community Member",
+      "favoriteClub": "Arsenal",
+      "favoriteClubCrest": "⚽",
+      "favoriteCountry": "Nigeria",
+      "favoriteCountryFlag": "🌍",
+      "favoritePlayers": [],
+      "fanPoints": 2,
+      "weeklyPoints": 2,
+      "followersCount": 0,
+      "followingCount": 0,
+      "postsCount": 1,
+      "predictionAccuracy": 0,
+      "correctPredictions": 0,
+      "totalPredictions": 0,
+      "badges": [],
+      "isAuthenticated": true,
+      "location": "",
+      "website": "",
+      "email": "futfieldsport@gmail.com",
+      "isOfficialCreator": true
+    },
+    "39ac89f9-ccd9-4be5-9324-b06bed16a74f": {
+      "id": "39ac89f9-ccd9-4be5-9324-b06bed16a74f",
+      "name": "Futfield ",
+      "handle": "@futfield",
+      "avatar": "/futfield-logo.jpg",
+      "bio": "⚽ Arsenal Supporter | Matchday Tactician | FUTFIELD Community Member",
+      "favoriteClub": "Arsenal",
+      "favoriteClubCrest": "⚽",
+      "favoriteCountry": "Nigeria",
+      "favoriteCountryFlag": "🌍",
+      "favoritePlayers": [],
+      "fanPoints": 2,
+      "weeklyPoints": 2,
+      "followersCount": 0,
+      "followingCount": 0,
+      "postsCount": 1,
+      "predictionAccuracy": 0,
+      "correctPredictions": 0,
+      "totalPredictions": 0,
+      "badges": [],
+      "isAuthenticated": true,
+      "location": "",
+      "website": "",
+      "email": "futfieldsport@gmail.com",
+      "isOfficialCreator": true
+    }
+  },
+  "predictorPicks": [],
+  "arenaPolls": [
+    {
+      "id": "poll_1",
+      "question": "Who wins the UEFA Champions League this season?",
+      "category": "UEFA Champions League",
+      "authorName": "Futfield",
+      "options": [
+        {
+          "id": "opt_1",
+          "label": "Real Madrid",
+          "votes": 14
+        },
+        {
+          "id": "opt_2",
+          "label": "Arsenal",
+          "votes": 11
+        },
+        {
+          "id": "opt_3",
+          "label": "FC Barcelona / Bayern",
+          "votes": 9
+        }
+      ],
+      "voters": {},
+      "createdAt": "2026-11-21T02:46:14.345Z"
+    },
+    {
+      "id": "poll_2",
+      "question": "Who is the Premier League Player of the Season so far?",
+      "category": "Premier League",
+      "authorName": "Futfield",
+      "options": [
+        {
+          "id": "opt_1",
+          "label": "Mohamed Salah",
+          "votes": 18
+        },
+        {
+          "id": "opt_2",
+          "label": "Bukayo Saka",
+          "votes": 12
+        },
+        {
+          "id": "opt_3",
+          "label": "Cole Palmer",
+          "votes": 10
+        }
+      ],
+      "voters": {},
+      "createdAt": "2026-11-21T02:46:14.346Z"
+    }
+  ]
 }

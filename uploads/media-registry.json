@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "id": "media_1795230850439_5d6f",
+    "fileName": "verify-test.png",
+    "url": "/uploads/images/1795230849901_hm0k_verify-test.png",
+    "bucket": "post-images",
+    "mediaKind": "image",
+    "mimeType": "image/png",
+    "sizeBytes": 70,
+    "sizeMb": 0,
+    "userId": "user",
+    "createdAt": "2026-11-21T03:14:10.439Z"
+  }
+]
