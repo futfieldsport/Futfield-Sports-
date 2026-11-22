@@ -12,7 +12,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      allowedHosts: ['sb-33hgerzrkaw1.vercel.run', 'sb-3j1pqz6dxuyz.vercel.run', 'sb-4vwr1et3qhz6.vercel.run', 'sb-4m3q9vj672oi.vercel.run'],
+      allowedHosts: ['sb-33hgerzrkaw1.vercel.run', 'sb-3j1pqz6dxuyz.vercel.run', 'sb-4vwr1et3qhz6.vercel.run', 'sb-4m3q9vj672oi.vercel.run', 'sb-y4tu6ywrwvfl.vercel.run'],
       hmr: false,
       watch: null,
     },
