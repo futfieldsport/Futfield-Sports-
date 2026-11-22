@@ -6562,9 +6562,9 @@ app.get('/api/paystack/status', async (req, res) => {
   }
 
   try {
-    const testRes = await fetch('https://api.paystack.co/bank', {
+    const testRes = await fetch('https://api.paystack.co/balance', {
       headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(8000),
     });
     const testData = await testRes.json();
     if (testRes.ok && testData.status) {
