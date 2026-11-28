@@ -4,7 +4,7 @@ import { BLOG_ARTICLES } from '../data/blogArticles';
 export const PROD_DOMAIN = 'https://www.futfieldsport.com.ng';
 export const CANONICAL_DOMAIN = PROD_DOMAIN;
 export const DEFAULT_OG_IMAGE = `${PROD_DOMAIN}/futfield-logo.jpg`;
-export const DEFAULT_SEO_TITLE = 'FUTFIELD — Live Football Scores, Match Rooms & Futfield Tube';
+export const DEFAULT_SEO_TITLE = 'Futfield | Live Football Scores, Fan Community & Futfield Tube';
 export const DEFAULT_SEO_DESCRIPTION =
   'Join worldwide football fans on FUTFIELD! Watch match highlights, join live stadium rooms, and connect with football fans worldwide.';
 export const DEFAULT_SEO_KEYWORDS =
