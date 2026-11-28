@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 Disallow: /api/
-Sitemap: https://futfieldsport.com.ng/sitemap.xml
+Sitemap: https://www.futfieldsport.com.ng/sitemap.xml

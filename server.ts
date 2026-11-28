@@ -7971,7 +7971,7 @@ app.post('/api/reviews/:id/upvote', (req, res) => {
 // -------------------------------------------------------------
 // Viral SEO Endpoints: /robots.txt & Dynamic /sitemap.xml (futfieldsport.com.ng)
 // -------------------------------------------------------------
-const SEO_CANONICAL_DOMAIN = 'https://futfieldsport.com.ng';
+const SEO_CANONICAL_DOMAIN = 'https://www.futfieldsport.com.ng';
 
 app.get('/robots.txt', (_req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
